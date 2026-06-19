@@ -1,0 +1,69 @@
+<?xml version="1.1" ?>
+<settings>
+    <global>
+        <atma>
+
+        </atma>
+        <collapse>
+            <adze>true</adze>
+            <alectryon>true</alectryon>
+            <minhocao>true</minhocao>
+            <muscaliet>true</muscaliet>
+            <ophanim>true</ophanim>
+        </collapse>
+        <conflux>
+
+        </conflux>
+        <display>
+            <bg_alpha>0.35</bg_alpha>
+            <draggable>true</draggable>
+            <font>Tahoma</font>
+            <font_size>11</font_size>
+            <minimized>false</minimized>
+            <pos_x>1400</pos_x>
+            <pos_y>300</pos_y>
+            <show_cfg>false</show_cfg>
+            <width>440</width>
+        </display>
+        <map>
+            <large>true</large>
+            <position>right</position>
+            <size>500</size>
+            <visible>false</visible>
+        </map>
+        <session>
+            <last_nm>Chloris</last_nm>
+            <last_view>tree</last_view>
+            <last_zone>Abyssea - Tahrongi</last_zone>
+        </session>
+        <trust_set>
+            <glavoid>Glavoid</glavoid>
+        </trust_set>
+        <trusts>
+
+        </trusts>
+    </global>
+    <maquis>
+        <collapse>
+            <adze>false</adze>
+            <alectryon>false</alectryon>
+            <minhocao>false</minhocao>
+            <muscaliet>false</muscaliet>
+            <ophanim>false</ophanim>
+        </collapse>
+        <display>
+            <bg_alpha>245</bg_alpha>
+            <pos_x>77.616638183631</pos_x>
+            <pos_y>577.18340301498</pos_y>
+            <width>600</width>
+        </display>
+        <map>
+            <position>bottom</position>
+            <size>600</size>
+            <visible>true</visible>
+        </map>
+        <session>
+            <last_nm>Glavoid</last_nm>
+        </session>
+    </maquis>
+</settings>

@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AbyssTracker — Data Gaps</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a12;color:#ddd;font-family:Tahoma,sans-serif;font-size:13px;padding:16px}
+h1{color:#ffc846;font-size:16px;margin-bottom:4px;letter-spacing:1px}
+.subtitle{color:#888;font-size:11px;margin-bottom:18px}
+h2{color:#8ca8e0;font-size:11px;margin:18px 0 8px;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #1e1e2e;padding-bottom:4px}
+.gap{background:#16161f;border-left:3px solid #ff4444;border-radius:4px;margin-bottom:8px;padding:8px 10px}
+.gap.partial{border-left-color:#ffaa00}
+.gap.resolved{border-left-color:#46dc46;opacity:0.6}
+.gap-title{color:#ff8c2d;font-weight:bold;font-size:12px;margin-bottom:4px}
+.gap.partial .gap-title{color:#ffaa00}
+.gap.resolved .gap-title{color:#46dc46}
+.gap-desc{color:#aaa;font-size:11px;margin-bottom:8px;line-height:1.5}
+.field{margin-bottom:6px}
+.field label{color:#9de;font-size:11px;display:block;margin-bottom:2px}
+.field input,.field select{background:#1e1e2e;border:1px solid #444;color:#fff;padding:4px 8px;border-radius:3px;font-family:inherit;font-size:12px;width:100%}
+.field input:focus,.field select:focus{border-color:#8ca8e0;outline:none}
+.field input.good{border-color:#46dc46}
+.mark-resolved{padding:4px 12px;background:#1a3a1a;border:1px solid #46dc46;color:#46dc46;border-radius:3px;cursor:pointer;font-size:11px;margin-top:6px;font-family:inherit}
+.mark-resolved:hover{background:#2a4a2a}
+.output{margin-top:20px;background:#0e0e18;border:1px solid #2d1e52;border-radius:6px;padding:12px}
+.output h2{margin-top:0;color:#ffc846;border:none}
+pre{font-size:11px;color:#9de;white-space:pre-wrap;line-height:1.6;margin-top:8px}
+.copy-btn{margin-top:10px;padding:6px 16px;background:#2d1e52;border:1px solid #8ca8e0;color:#8ca8e0;border-radius:4px;cursor:pointer;font-size:12px;font-family:inherit}
+.copy-btn:hover{background:#3d2e72}
+.copy-btn.copied{border-color:#46dc46;color:#46dc46;background:#1a3a1a}
+.stats{display:flex;gap:16px;margin-bottom:16px}
+.stat{background:#16161f;border-radius:4px;padding:8px 14px;text-align:center}
+.stat-n{color:#ffc846;font-size:22px;font-weight:bold}
+.stat-l{color:#888;font-size:10px}
+.note{background:#1a1a10;border:1px solid #666020;border-radius:4px;padding:8px 10px;margin-bottom:16px;color:#cccc80;font-size:11px;line-height:1.5}
+</style>
+</head>
+<body>
+<h1>AbyssTracker — Data Gap Filler</h1>
+<p class="subtitle">Fill in the remaining unknowns from your in-game research. Each entry generates a Lua snippet to paste into your zone file.</p>
+
+<div class="note">
+  <strong>How to use:</strong> For each gap, note the value in-game and type it in the field. Click "Mark resolved" when done. Copy all generated snippets at the bottom and paste them into the relevant .lua files in your <code>data/</code> folder.
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="stat-n" id="total-n">12</div><div class="stat-l">Total gaps</div></div>
+  <div class="stat"><div class="stat-n" id="resolved-n">0</div><div class="stat-l">Resolved</div></div>
+  <div class="stat"><div class="stat-n" id="remaining-n">12</div><div class="stat-l">Remaining</div></div>
+</div>
+
+<div id="gaps-container"></div>
+
+<div class="output">
+  <h2>Generated Lua snippets</h2>
+  <pre id="output">← Fill in gaps above to generate snippets</pre>
+  <button class="copy-btn" onclick="copyOutput()">Copy to clipboard</button>
+</div>
+
+<script>
+const gaps = [
+  // La Theine
+  {
+    id:'hadhayosh_note', zone:'La Theine', nm:'Hadhayosh (K-8)', status:'partial',
+    title:'Hadhayosh — requires cross-boss KIs',
+    desc:'Hadhayosh needs 4 KIs total:\n• Marbled Mutton Chop (from Trudging Thomas) ✓\n• Bloodied Saber Tooth (from Megantereon) ✓\n• Blood-Smeared Gigas Helm (from BRIAREUS — farm him first!)\n• Glittering Pixie Choker (from CARABOSSE — farm her first!)\nThis is already in the Lua file as a note. Just confirming you know!',
+    fields:[],
+    snippet: '-- La Theine: Hadhayosh already documented. Reminder: farm Briareus + Carabosse FIRST for their KIs before popping Hadhayosh.'
+  },
+  // Konschtat
+  {
+    id:'eccentric_eve_5th_ki', zone:'Konschtat', nm:'Eccentric Eve (I-7)', status:'partial',
+    title:'Eccentric Eve — 5th KI is Venomous Peiste Claw from Kukulkan',
+    desc:'Eve requires 5 KIs. The 5th (Venomous Peiste Claw) drops from Kukulkan itself.\nPop order: farm all 4 lower NMs → pop Kukulkan (get Venomous Peiste Claw KI) → pop Eve.\nThis is already correct in the Lua file. Verify the KI id=1467 is correct in-game.',
+    fields:[{id:'ve_ki_id', label:'Verify: Venomous Peiste Claw KI ID (should be 1467)', placeholder:'1467'}],
+    snippet: '-- Konschtat: Eccentric Eve 5th KI (Venomous Peiste Claw from Kukulkan) KI id=1467'
+  },
+  // Attohwa
+  {
+    id:'granite_borer_pos', zone:'Attohwa', nm:'Granite Borer', status:'open',
+    title:'Granite Borer — exact ??? position for Withered Cocoon trade',
+    desc:'Granite Borer spawns by trading Withered Cocoon to a ???.\nApproximate area: H-10. Need exact grid square.',
+    fields:[{id:'gb_pos', label:'??? position (e.g. H-10)', placeholder:'H-10'}],
+    snippet: null, key:'gb_pos', lua:"-- Attohwa: Granite Borer pop position: ???"
+  },
+  {
+    id:'blazing_eruca_pos', zone:'Attohwa', nm:'Blazing Eruca', status:'open',
+    title:'Blazing Eruca — exact ??? position for Eruca Egg trade',
+    desc:'Approximate area: L-10. Need exact grid square.',
+    fields:[{id:'be_pos', label:'??? position (e.g. L-10)', placeholder:'L-10'}],
+    snippet: null, key:'be_pos'
+  },
+  {
+    id:'kharon_pop', zone:'Attohwa', nm:'Kharon (Skeleton)', status:'open',
+    title:'Kharon — pop item name from Schnitter',
+    desc:'Schnitter (Skeleton mob) drops a pop item for Kharon.\nConfirmed name in our file is "Bone Chip". Verify spelling matches Windower resources.',
+    fields:[{id:'kharon_item', label:'Pop item name (from Schnitter)', placeholder:'Bone Chip'}],
+    snippet: null, key:'kharon_item'
+  },
+  // Misareaux
+  {
+    id:'minax_bugard_item', zone:'Misareaux', nm:'Minax Bugard', status:'open',
+    title:'Minax Bugard — confirm pop item from Abyssobugard',
+    desc:'Current data: "Bewitching Tusk" from Abyssobugard @ J-K/10-11.\nVerify this is correct. Abyssobugard is the regular mob in that area.',
+    fields:[{id:'mb_item', label:'Pop item name', placeholder:'Bewitching Tusk'}],
+    snippet: null, key:'mb_item'
+  },
+  {
+    id:'cep_kamuy_item', zone:'Misareaux', nm:'Cep-Kamuy', status:'open',
+    title:'Cep-Kamuy — confirm pop item name',
+    desc:'Current data: "Orobon Meat" from Ancient Orobon (corrected from Orobon Cheekmeant).\nVerify in Windower resources.',
+    fields:[{id:'ck_item', label:'Pop item name (should be Orobon Meat)', placeholder:'Orobon Meat'}],
+    snippet: null, key:'ck_item'
+  },
+  // Altepa  
+  {
+    id:'amarok_pop', zone:'Altepa', nm:'Amarok (wolf NM)', status:'open',
+    title:'Amarok — pop item UNKNOWN',
+    desc:'Amarok is the wolf/hound NM that drops Steaming Cerberus Tongue (used to pop Orthrus).\nWe do not know what pop item spawns Amarok, or if it is timed.\nCheck in-game or on wiki.',
+    fields:[
+      {id:'amarok_item', label:'Pop item (or "timed" if no item needed)', placeholder:'Unknown'},
+      {id:'amarok_from', label:'Drops from which mob family?', placeholder:'Unknown'},
+      {id:'amarok_pos', label:'Amarok spawn position', placeholder:'H-8'},
+    ],
+    snippet: null, key:'amarok_item'
+  },
+  // Vunkerl
+  {
+    id:'moonbeam_clam', zone:'Vunkerl', nm:'Iku-Turso (Sea Monk)', status:'open',
+    title:'Iku-Turso — confirm Moonbeam Clam source',
+    desc:'Iku-Turso spawns by trading Moonbeam Clam.\nMoonbeam Clam may come from Jasconius (a fishing NM?) or a regular mob.\nVerify the source and position.',
+    fields:[
+      {id:'mc_from', label:'Moonbeam Clam drops from which mob?', placeholder:'Jasconius (fishing?)'},
+      {id:'mc_pos', label:'Where is that mob?', placeholder:'G-H/7-9'},
+    ],
+    snippet: null, key:'mc_from'
+  },
+  // Grauberg
+  {
+    id:'ningishzida_pop', zone:'Grauberg', nm:'Ningishzida (Hydra)', status:'open',
+    title:'Ningishzida — confirm both pop items',
+    desc:'Current data: Pursuer\'s Wing (from Faunus Wyvern) + Minaruja Skull (from Minaruja).\nVerify both items and mob locations.',
+    fields:[
+      {id:'ning_item1', label:'First pop item', placeholder:"Pursuer's Wing"},
+      {id:'ning_from1', label:'From which mob?', placeholder:'Faunus Wyvern'},
+      {id:'ning_item2', label:'Second pop item', placeholder:'Minaruja Skull'},
+      {id:'ning_from2', label:'From which mob?', placeholder:'Minaruja'},
+    ],
+    snippet: null, key:'ning_item1'
+  },
+  // Uleguerand
+  {
+    id:'sisyphus_pop', zone:'Uleguerand', nm:'Dhorme Khimaira chain', status:'open',
+    title:'Dhorme Khimaira chain — verify all 3 tiers',
+    desc:'Tier chain to pop Dhorme Khimaira:\n• Gelid Arm from Snowflake (regular mob)\n• Gelid Arm → pop Upas-Kamuy → drops Snow God Core\n• Snow God Core → pop Sisyphus → drops Sisyphus Fragment\n• Sisyphus Fragment → pop Dhorme Khimaira → drops Torn Khimaira Wing\n• Torn Khimaira Wing → pop Apademak\nVerify all mob names and positions are correct.',
+    fields:[
+      {id:'upas_pos', label:'Upas-Kamuy spawn position', placeholder:'G-I/7-9'},
+      {id:'sisyphus_pos', label:'Sisyphus spawn position', placeholder:'F-H/7-9'},
+      {id:'dhorme_pos', label:'Dhorme Khimaira spawn position', placeholder:'G-8'},
+    ],
+    snippet: null, key:'upas_pos'
+  },
+  {
+    id:'kur_pos', zone:'Uleguerand', nm:'Kur (Wolf NM)', status:'open',
+    title:'Kur — exact position',
+    desc:'Kur is a timed wolf NM that drops Begrimed Dragon Hide (used to pop Isgebind).\nApproximate position: D-5. Verify exact location.',
+    fields:[{id:'kur_pos', label:'Kur spawn position', placeholder:'D-5'}],
+    snippet: null, key:'kur_pos'
+  },
+];
+
+const values = {};
+const resolved = new Set();
+
+function updateStats() {
+  const res = resolved.size;
+  document.getElementById('resolved-n').textContent = res;
+  document.getElementById('remaining-n').textContent = gaps.length - res;
+}
+
+function generateOutput() {
+  const lines = [];
+  for (const g of gaps) {
+    if (g.snippet) { lines.push(g.snippet); continue; }
+    if (resolved.has(g.id)) {
+      const v = values[g.key] || '';
+      if (v && v !== g.fields[0]?.placeholder) {
+        lines.push(`-- ${g.zone}: ${g.nm} — ${g.fields[0]?.label || ''}: ${v}`);
+        // Generate extra fields
+        for (let i=1; i<g.fields.length; i++) {
+          const fv = values[g.fields[i].id] || '';
+          if (fv) lines.push(`--   ${g.fields[i].label}: ${fv}`);
+        }
+      }
+    }
+  }
+  const out = document.getElementById('output');
+  out.textContent = lines.length ? lines.join('\n\n') : '← Mark gaps as resolved above to generate snippets';
+}
+
+function render() {
+  const c = document.getElementById('gaps-container');
+  const byZone = {};
+  for (const g of gaps) {
+    if (!byZone[g.zone]) byZone[g.zone] = [];
+    byZone[g.zone].push(g);
+  }
+  c.innerHTML = '';
+  for (const [zone, zGaps] of Object.entries(byZone)) {
+    const h = document.createElement('h2');
+    h.textContent = zone;
+    c.appendChild(h);
+    for (const g of zGaps) {
+      const isRes = resolved.has(g.id);
+      const div = document.createElement('div');
+      div.className = 'gap ' + (isRes ? 'resolved' : g.status);
+      div.innerHTML = `<div class="gap-title">${g.nm}: ${g.title}</div>
+        <div class="gap-desc">${g.desc.replace(/\n/g,'<br>')}</div>`;
+      for (const f of g.fields || []) {
+        const fd = document.createElement('div');
+        fd.className = 'field';
+        fd.innerHTML = `<label>${f.label}</label>
+          <input id="inp-${f.id}" type="text" placeholder="${f.placeholder}" 
+            value="${values[f.id]||''}" ${isRes?'disabled':''}>`;
+        div.appendChild(fd);
+        setTimeout(() => {
+          const inp = document.getElementById(`inp-${f.id}`);
+          if (inp) inp.addEventListener('input', e => { values[f.id] = e.target.value; generateOutput(); });
+        }, 0);
+      }
+      if (!isRes && g.fields?.length > 0) {
+        const btn = document.createElement('button');
+        btn.className = 'mark-resolved';
+        btn.textContent = '✓ Mark resolved';
+        btn.onclick = () => { resolved.add(g.id); updateStats(); render(); generateOutput(); };
+        div.appendChild(btn);
+      } else if (isRes) {
+        div.innerHTML += '<div style="color:#46dc46;font-size:11px;margin-top:4px">✓ Resolved</div>';
+      }
+      c.appendChild(div);
+    }
+  }
+  updateStats();
+}
+
+function copyOutput() {
+  navigator.clipboard.writeText(document.getElementById('output').textContent).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = 'Copied!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent='Copy to clipboard'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+render();
+</script>
+</body>
+</html>
