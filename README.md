@@ -241,7 +241,7 @@ Defines Empyrean Armor upgrade data used by the +1 and +2 screens:
 
 ## Credits
 
-- **Maquis** (Carbuncle) — design, development, in-game testing
+- **Maquis** (Phoenix) — design, development, in-game testing
 - NM data cross-referenced with [EmpyPopTracker](https://github.com/devonbwied/empypoptracker) by Dean James (Xurion of Bismarck)
 - Zone maps sourced from the FFXI wiki and pre-scaled for display
 - Seal and currency drop data verified against [bg-wiki.com/ffxi/Abyssea_Guide](https://www.bg-wiki.com/ffxi/Abyssea_Guide)
