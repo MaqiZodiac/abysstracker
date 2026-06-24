@@ -1,8 +1,16 @@
 --==================================================================================================
--- AbyssTracker v2.5
--- Inventory: named bag keys (invtracker pattern)
--- Display: clean KI lines, no redundant rows
--- Info: per-entry atma effects from atma.lua
+-- AbyssTracker v3.0
+-- MAJOR: Two-row header — "Abyssea Tracker" title bar (drag zone) + nav/breadcrumb row
+-- MAJOR: Drop Overview restructured — Boss Drops + ">> Empyrean Armor +1" + ">> Empyrean Armor +2"
+--          each as a full replacement screen (state.view = 'plus1' | 'plus2')
+-- MAJOR: Empyrean Armor +1 — all 20 jobs in FFXI canonical order, job tabs, slot rows,
+--          seal names use correct in-game abbreviated format (Rvg./Aoid./Estq. etc.)
+-- MAJOR: Empyrean Armor +2 — currency series with per-item NM source data
+-- MAJOR: Drop Sources screen — click any item (boss drop, seal, currency) → sources view
+--          listing all NMs that drop it, each linkable to nm_view / entity_view
+-- MAJOR: Conflux # shown in nm_list for boss NMs (e.g. "T5 Chloris (I-8) #7")
+-- Data:  abyssea_drops.lua v2.0 — full seal table (all 20 jobs × 5 slots × 2-3 NMs each),
+--          currency items with NM source arrays, job_display_order in FFXI canonical order
 -- Trusts: shows FindAll trust set name + [Summon] button
 --==================================================================================================
 
@@ -51,6 +59,7 @@ local T = {
 --==================================================================================================
 local defaults = {
     display={pos_x=1200,pos_y=160,bg_alpha=200,minimized=false,show_cfg=false,font_size=11,draggable=true,width=450},
+    map={visible=false,position='right',size=500},
     session={last_zone='Abyssea - Tahrongi',last_nm='Chloris',last_view='tree'},
     collapse={},conflux={},atma={},
     trust_set={},  -- { ['Chloris']='chloris_set', ['Glavoid']='glavoid_set' }
@@ -61,16 +70,19 @@ local defaults = {
 --==================================================================================================
 local settings={} local zones={} local zone_list={}
 local all_prims={} local all_texts={} local hot_zones={}
+local map_ctx={created=false,loaded_key=nil,last_size=nil}
+local MAP_PRIM='at_map_img'; local MAP_BORDER='at_map_border'
 local drag={active=false,sx=0,sy=0,ox=0,oy=0}
-local key_state={ctrl=false,alt=false}
+local key_state={ctrl=false,alt=false,shift=false}
 local state={
     view='zone_menu',zone=nil,nm=nil,
     show_footer=false,footer_entry=nil,
     inv={},ki={},
     minimized=false,px=1200,py=160,panel_h=100,
-    drop_source_item=nil,    -- item name string for drop_sources view
-    drop_source_back=nil,    -- view name to return to from drop_sources
-    active_job=nil,          -- selected job tab in plus1 view
+    map_visible=false,
+    drop_source_item=nil,
+    drop_source_back=nil,
+    active_job=nil,
 }
 
 -- Debug overlay
@@ -232,6 +244,7 @@ local function save_settings()
     settings.display.minimized=state.minimized
     settings.display.pos_x=state.px;settings.display.pos_y=state.py
     settings.display.width=T.WIDTH
+    settings.map.visible=state.map_visible
     config.save(settings)
 end
 local function load_settings()
@@ -241,7 +254,11 @@ local function load_settings()
     if not settings.display.width     then settings.display.width=450 end
     if settings.display.show_cfg==nil then settings.display.show_cfg=false end
     if not settings.trust_set         then settings.trust_set={} end
+    if not settings.map               then settings.map={visible=false,position='right',size=500} end
+    if not settings.map.size          then settings.map.size=500 end
+    settings.map.large=nil
     state.minimized=settings.display.minimized
+    state.map_visible=settings.map.visible
     state.px=settings.display.pos_x;state.py=settings.display.pos_y
     T.SZ=settings.display.font_size;T.SZ_H=T.SZ+1;T.ROW_H=T.SZ+6
     T.WIDTH=settings.display.width
@@ -292,6 +309,25 @@ local function get_count(name) return state.inv[name:lower()] or 0 end
 local function has_ki(id) return id and id~=0 and state.ki[id]==true end
 
 -- Per-zone label colors (muted, distinct)
+local ZONE_MAP={
+    ['tahrongi']  ={file='tahrongi',  iw=600,ih=600,gx0=77,gy0=76,gx1=521,gy1=528,nc=14,nr=14},
+    ['latheine']  ={file='latheine',  iw=600,ih=600,gx0=77,gy0=76,gx1=521,gy1=528,nc=14,nr=14},
+    ['konschtat'] ={file='konschtat', iw=600,ih=600,gx0=77,gy0=76,gx1=521,gy1=528,nc=14,nr=14},
+    ['attohwa']   ={file='attohwa',   iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
+    ['misareaux'] ={file='misareaux', iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
+    ['vunkerl']   ={file='vunkerl',   iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
+    ['grauberg']  ={file='grauberg',  iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
+    ['altepa']    ={file='altepa',    iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
+    ['uleguerand']={file='uleguerand',iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
+}
+local ZONE_TO_KEY={
+    ['Abyssea - Tahrongi']  ='tahrongi',  ['Abyssea - La Theine'] ='latheine',
+    ['Abyssea - Konschtat'] ='konschtat', ['Abyssea - Misareaux'] ='misareaux',
+    ['Abyssea - Vunkerl']   ='vunkerl',   ['Abyssea - Attohwa']   ='attohwa',
+    ['Abyssea - Grauberg']  ='grauberg',  ['Abyssea - Altepa']    ='altepa',
+    ['Abyssea - Uleguerand']='uleguerand',
+}
+
 local ZONE_COLORS={
     ['Abyssea - Tahrongi'] ={160,210,185},
     ['Abyssea - La Theine']={140,175,220},
@@ -361,6 +397,61 @@ local function txt(x,y,w,h,rgb,sz,bold,str,on_left,dtype,ref)
     all_texts[#all_texts+1]={obj=obj,dtype=dtype,ref=ref,fill_prim=nil}
     if on_left then hot_zones[#hot_zones+1]={x=x,y=y,w=w,h=h,fn=on_left} end
     return #all_texts
+end
+
+local function destroy_map()
+    if map_ctx.created then
+        pcall(windower.prim.delete, MAP_PRIM)
+        pcall(windower.prim.delete, MAP_BORDER)
+        map_ctx.created=false; map_ctx.loaded_key=nil; map_ctx.last_size=nil
+    end
+end
+
+local function update_map_display()
+    if not state.map_visible or not state.zone then
+        if map_ctx.created then
+            pcall(function() windower.prim.set_visibility(MAP_PRIM,   false) end)
+            pcall(function() windower.prim.set_visibility(MAP_BORDER, false) end)
+        end
+        return
+    end
+    local zkey=ZONE_TO_KEY[state.zone.zone_name]
+    local zm=zkey and ZONE_MAP[zkey]
+    if not zm then return end
+    local mpos=settings.map.position; local ms=settings.map.size
+    local mw,mh=ms,ms
+    local mx,my
+    if     mpos=='right'  then mx=state.px+T.WIDTH+4; my=state.py
+    elseif mpos=='left'   then mx=state.px-mw-4;      my=state.py
+    elseif mpos=='bottom' then mx=state.px;            my=state.py+state.panel_h+4
+    else                       mx=state.px;            my=state.py-mh-4 end
+    if not map_ctx.created then
+        windower.prim.create(MAP_BORDER)
+        windower.prim.set_color(MAP_BORDER,240,8,8,15)
+        windower.prim.create(MAP_PRIM)
+        windower.prim.set_color(MAP_PRIM,255,255,255,255)
+        map_ctx.created=true
+    end
+    windower.prim.set_position(MAP_BORDER, mx-2, my-2)
+    windower.prim.set_size(MAP_BORDER, mw+4, mh+4)
+    windower.prim.set_visibility(MAP_BORDER, true)
+    windower.prim.set_position(MAP_PRIM, mx, my)
+    windower.prim.set_visibility(MAP_PRIM, true)
+    local size_changed=(map_ctx.last_size~=ms)
+    if zkey~=map_ctx.loaded_key then
+        map_ctx.loaded_key=zkey
+        map_ctx.last_size=ms
+        windower.prim.set_texture(MAP_PRIM, windower.addon_path..'maps/'..zm.file..'.bmp')
+        windower.prim.set_size(MAP_PRIM, mw, mh)
+        coroutine.schedule(function()
+            pcall(function() windower.prim.set_size(MAP_PRIM,mw,mh) end)
+        end, 0.15)
+    elseif size_changed then
+        map_ctx.last_size=ms
+        windower.prim.set_size(MAP_PRIM, mw, mh)
+    else
+        windower.prim.set_size(MAP_PRIM, mw, mh)
+    end
 end
 
 local function destroy_all()
@@ -505,15 +596,29 @@ local function build_ui()
             elseif state.view=='overview' then state.view='zone_menu';build_ui() end
         end)
     local vlbl=(settings.session.last_view=='tree') and '[Tree]' or '[List]'
-    txt(px+pw-140,by,46,T.HDR_H,T.BLUE,T.SZ,false,vlbl,
+    txt(px+pw-204,by,48,T.HDR_H,T.BLUE,T.SZ,false,vlbl,
         function() settings.session.last_view=(settings.session.last_view=='tree') and 'list' or 'tree';save_settings();build_ui() end)
+    local map_col=state.map_visible and {80,220,200} or {130,130,150}
+    txt(px+pw-152,by,40,T.HDR_H,map_col,T.SZ,true,'[Map]',
+        function()
+            state.map_visible=not state.map_visible
+            if not state.map_visible then destroy_map() end
+            save_settings();build_ui()
+        end)
     local cfg_col=settings.display.show_cfg and T.YELLOW or T.GREY
-    txt(px+pw-92,by,32,T.HDR_H,cfg_col,T.SZ,false,'[Cfg]',
+    txt(px+pw-107,by,36,T.HDR_H,cfg_col,T.SZ,false,'[Cfg]',
         function() settings.display.show_cfg=not settings.display.show_cfg;save_settings();build_ui() end)
-    txt(px+pw-56,by,22,T.HDR_H,T.GREY,T.SZ,false,'[R]',
+    txt(px+pw-66,by,22,T.HDR_H,T.GREY,T.SZ,false,'[R]',
         function() refresh_inventory();refresh_key_items();refresh_data() end)
-    txt(px+pw-30,by,24,T.HDR_H,T.GREY,T.SZ,false,state.minimized and '[+]' or '[-]',
-        function() state.minimized=not state.minimized;save_settings();build_ui() end)
+    txt(px+pw-38,by,26,T.HDR_H,T.GREY,T.SZ,false,state.minimized and '[+]' or '[-]',
+        function()
+            state.minimized=not state.minimized
+            if state.minimized then
+                pcall(function() windower.prim.set_visibility(MAP_PRIM,false) end)
+                pcall(function() windower.prim.set_visibility(MAP_BORDER,false) end)
+            end
+            save_settings();build_ui()
+        end)
     cy=cy+T.HDR_H
 
     if state.minimized then
@@ -548,6 +653,21 @@ local function build_ui()
         txt(px+T.PAD_X+100,cy,24,T.ROW_H,T.GREEN,T.SZ,true,'[+]',function() T.WIDTH=math.min(600,T.WIDTH+20);save_settings();build_ui() end)
         txt(px+T.PAD_X+126,cy,24,T.ROW_H,T.RED,T.SZ,true,'[-]',function() T.WIDTH=math.max(300,T.WIDTH-20);save_settings();build_ui() end)
         txt(px+pw*0.5,cy,pw*0.5,T.ROW_H,T.GREY,T.SZ,false,'Ctrl+Scroll = Width')
+        cy=cy+T.ROW_H
+        local map_pos=settings.map and settings.map.position or 'right'
+        local map_sz =settings.map and settings.map.size   or 500
+        txt(px+T.PAD_X,cy,90,T.ROW_H,T.WHITE,T.SZ,false,'Map pos: '..map_pos)
+        txt(px+T.PAD_X+100,cy,52,T.ROW_H,{80,220,200},T.SZ,true,'[pos]',
+            function()
+                local p={['right']='bottom',['bottom']='left',['left']='top',['top']='right'}
+                settings.map.position=p[settings.map.position] or 'right'
+                save_settings();update_map_display()
+            end)
+        cy=cy+T.ROW_H
+        txt(px+T.PAD_X,cy,90,T.ROW_H,T.WHITE,T.SZ,false,'Map sz: '..map_sz..'px')
+        txt(px+T.PAD_X+100,cy,24,T.ROW_H,T.GREEN,T.SZ,true,'[+]',function() settings.map.size=math.min(1000,settings.map.size+50);map_ctx.last_size=nil;save_settings();update_map_display() end)
+        txt(px+T.PAD_X+126,cy,24,T.ROW_H,T.RED,T.SZ,true,'[-]',function() settings.map.size=math.max(100,settings.map.size-50);map_ctx.last_size=nil;save_settings();update_map_display() end)
+        txt(px+pw*0.5,cy,pw*0.5,T.ROW_H,T.GREY,T.SZ,false,'Shift+Scroll')
         cy=cy+T.ROW_H+4;sep()
     end
 
@@ -1265,6 +1385,7 @@ local function build_ui()
         state.shield:text(table.concat(lines,'\n'))
     end
     if dbg_obj then dbg_obj:pos(state.px,state.py+state.panel_h+2) end
+    if not state.minimized then update_map_display() end
 end
 
 --==================================================================================================
@@ -1309,16 +1430,17 @@ windower.register_event('mouse', function(type,x,y,delta,blocked)
     if type==10 then  -- scroll
         if in_panel then
             local up=delta and delta>0
-            if key_state.ctrl then
-                -- Ctrl+scroll = width
+            if key_state.shift then
+                settings.map.size=math.max(100,math.min(1000,settings.map.size+(up and 50 or -50)))
+                map_ctx.last_size=nil
+                save_settings();update_map_display();return true
+            elseif key_state.ctrl then
                 T.WIDTH=math.max(300,math.min(600,T.WIDTH+(up and -20 or 20)))
                 settings.display.width=T.WIDTH
             elseif key_state.alt then
-                -- Alt+scroll = font size
                 local fs=math.max(8,math.min(16,settings.display.font_size+(up and -1 or 1)))
                 settings.display.font_size=fs;T.SZ=fs;T.SZ_H=fs+1;T.ROW_H=fs+6
             else
-                -- plain scroll = opacity
                 settings.display.bg_alpha=math.max(20,math.min(245,settings.display.bg_alpha+(up and -20 or 20)))
             end
             save_settings();build_ui();return true
@@ -1363,6 +1485,19 @@ windower.register_event('addon command', function(cmd,...)
     elseif cmd=='tree' then settings.session.last_view='tree';save_settings();build_ui()
     elseif cmd=='list' then settings.session.last_view='list';save_settings();build_ui()
     elseif cmd=='refresh' then refresh_inventory();refresh_key_items();refresh_data()
+    elseif cmd=='map' then
+        state.map_visible=not state.map_visible
+        if not state.map_visible then destroy_map() end
+        save_settings();build_ui();chat('Map '..(state.map_visible and 'ON' or 'OFF'))
+    elseif cmd=='pos' then
+        local p={['right']='bottom',['bottom']='left',['left']='top',['top']='right'}
+        settings.map.position=p[settings.map.position] or 'right'
+        save_settings();update_map_display();chat('Map position: '..settings.map.position)
+    elseif cmd=='size' then
+        local v=tonumber(args[1])
+        if v then settings.map.size=math.max(100,math.min(1000,v));map_ctx.last_size=nil;save_settings();update_map_display()
+             chat('Map size: '..settings.map.size..'px')
+        else warn('Usage: //at size <100-1000>') end
         windower.add_to_chat(C.HAVE,'[AbyssTracker] Refreshed.')
     elseif cmd=='alpha' then
         local v=tonumber(args[1]);if v then settings.display.bg_alpha=math.floor(math.max(20,math.min(245,v)));save_settings();build_ui() end
@@ -1418,7 +1553,7 @@ windower.register_event('load', function()
     windower.add_to_chat(C.HAVE,'[AbyssTracker] Loaded. Type //at guide for help.')
 end)
 windower.register_event('unload', function()
-    save_settings();destroy_all()
+    save_settings();destroy_all();destroy_map()
     if dbg_obj then pcall(function() dbg_obj:destroy() end) end
 end)
 windower.register_event('login', function()
@@ -1427,4 +1562,5 @@ end)
 windower.register_event('keyboard', function(key,down)
     if key==29 or key==157 then key_state.ctrl=down end  -- Left/Right Ctrl
     if key==56 or key==184 then key_state.alt=down end   -- Left/Right Alt
+    if key==42 or key==54  then key_state.shift=down end -- Left/Right Shift
 end)
