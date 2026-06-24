@@ -53,13 +53,14 @@
         </collapse>
         <display>
             <bg_alpha>245</bg_alpha>
-            <pos_x>77.616638183631</pos_x>
-            <pos_y>577.18340301498</pos_y>
-            <width>600</width>
+            <font_size>10</font_size>
+            <pos_x>710.17941284182</pos_x>
+            <pos_y>1204.2535934447</pos_y>
+            <width>480</width>
         </display>
         <map>
-            <position>bottom</position>
-            <size>600</size>
+            <position>top</position>
+            <size>450</size>
             <visible>true</visible>
         </map>
         <session>

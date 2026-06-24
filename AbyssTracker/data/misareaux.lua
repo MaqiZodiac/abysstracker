@@ -2,59 +2,80 @@ return {
     zone_name='Abyssea - Misareaux', zone_id=216,
     confluxes={[1]={pos='L-7'},[2]={pos='J-8'},[3]={pos='F-7'},[4]={pos='H-11'},[5]={pos='G-6'},[6]={pos='F-8'},[7]={pos='H-13'},[8]={pos='L-13'}},
     nms={
-        --==========================================================================
-        -- CIREIN-CROIN — Zone Boss
-        -- MECHANIC: Can Charm when near death — kill quickly!
-        -- Drops: Cirein. Lantern (trial), Balance Stone
-        --==========================================================================
-        {name='Cirein-croin',pos='K-8',conflux=2,
-         goal_drops={{name='Cirein. Lantern',type='item'},{name='Balance Stone',type='item'}},
+        {name='Cirein-croin',pos='K-8',conflux=5,
+         goal_drops={{id=2965,name='Cirein. Lantern',type='item',target=50}},
          atma={'Atma of the Apocalypse'},trusts={'TBD'},
          chain={
-             {nm='Cep-Kamuy',pos='J-7',timed=false,ki={id=1504,name='Glistening Orobon Liver'},
-              pop_items={{name='Orobon Meat',from='Ancient Orobon',from_pos='H-J/6-8'}}},
-             {nm='Heqet',pos='H-13',timed=true,ki={id=1505,name='Doffed Poroggo Hat'},pop_items={}},
+             {nm='Cep-Kamuy',pos='J-7',conflux=5,timed=false,ki={id=1504,name='Glistening Orobon Liver'},
+              pop_items={{id=3089,name='Orbn. Cheekmeat',from='Ancient Orobon',from_pos='F-5',from_conflux=5}}},
+             {nm='Heqet',pos='I-6',conflux=5,timed=true,ki={id=1505,name='Doffed Poroggo Hat'},pop_items={}},
          }},
-        --==========================================================================
-        -- AMHULUK (Amphiptere) — pops with 3 KIs
-        -- Drops: Balance Stone, Balance Card
-        --==========================================================================
-        {name='Amhuluk',pos='G-8',conflux=2,
-         goal_drops={{name='Balance Stone',type='item'},{name='Balance Card',type='item'}},
-         atma={'TBD'},trusts={'TBD'},
-         chain={
-             {nm='Funereal Apkallu',pos='H-7',timed=false,ki={id=1501,name='Jagged Apkallu Beak'},
-              pop_items={{name='Apkallu Down',from='Overking Apkallu',from_pos='H-I/6-7'}}},
-             {nm='Manohra',pos='I-7',timed=false,ki={id=1502,name='Clipped Bird Wing'},
-              pop_items={{name='Avian Remex',from='Frigatebird',from_pos='I-J/6-8'}}},
-             {nm='Asanbosam',pos='G-8',timed=true,ki={id=1503,name='Bloodied Bat Fur'},pop_items={}},
-         }},
-        --==========================================================================
-        -- SOBEK (Bugard boss) — pops with 3 KIs from Minax Bugard/Sirrush/Gukumatz
-        -- Drops: Sobek's Skin (trial)
-        --==========================================================================
-        {name='Sobek',pos='K-10',conflux=4,
-         goal_drops={{name="Sobek's Skin",type='item'}},
+        {name='Sobek',pos='K-10',conflux=7,
+         goal_drops={{id=2964,name="Sobek's Skin",type='item',target=50}},
          atma={'Atma of the Gnarled Horn'},trusts={'TBD'},
          chain={
-             {nm='Minax Bugard',pos='J-10',timed=false,ki={id=1498,name='Bloodstained Bugard Fang'},
-              pop_items={{name='Bewitching Tusk',from='Abyssobugard',from_pos='J-K/10-11'}}},
-             {nm='Sirrush',pos='K-9',timed=false,ki={id=1499,name='Gnarled Lizard Nail'},
-              pop_items={{name='Molt Scraps',from='Dusk Lizard',from_pos='J-L/8-10'}}},
-             {nm='Gukumatz',pos='I-8',timed=true,ki={id=1500,name='Molted Peiste Skin'},pop_items={}},
+             {nm='Gukumatz',pos='J-11',conflux=7,timed=true,ki={id=1500,name='Molted Peiste Skin'},pop_items={}},
+             {nm='Minax Bugard',pos='K-10',conflux=8,timed=false,ki={id=1498,name='Bloodstained Bugard Fang'},
+              pop_items={{id=3085,name='Bewitching Tusk',from='Abyssobugard',from_pos='K-11',from_conflux=8}}},
+             {nm='Sirrush',pos='I-11',conflux=7,timed=false,ki={id=1499,name='Gnarled Lizard Nail'},
+              pop_items={{id=3086,name='Molt Scraps',from='Dusk Lizard',from_pos='J-11',from_conflux=7}}},
          }},
-        --==========================================================================
-        -- IRONCLAD PULVERIZER — Zone Ironclad
-        -- Drops: Ardor Stone, Ardor Coin, Atma of the Razed Ruins
-        -- MECHANIC: At low HP, head separates as second NM — defeat both!
-        --==========================================================================
-        {name='Ironclad Pulverizer',pos='K-13',conflux=7,
-         goal_drops={{name='Ardor Stone',type='item'},{name='Ardor Coin',type='item'}},
+        {name='Amhuluk',pos='G-8',conflux=4,
+         goal_drops={},
+         atma={'TBD'},trusts={'TBD'},
+         chain={
+             {nm='Funereal Apkallu',pos='H-7',conflux=nil,timed=false,ki={id=1501,name='Jagged Apkallu Beak'},
+              pop_items={{id=3087,name='Apkallu Down',from='Overking Apkallu',from_pos='I-7'}}},
+             {nm='Manohra',pos='I-7',conflux=nil,timed=false,ki={id=1502,name='Clipped Bird Wing'},
+              pop_items={{id=nil,name='Avian Remex',from='Frigatebird',from_pos='H-9',from_conflux=4}}},
+             {nm='Asanbosam',pos='G-8',conflux=4,timed=true,ki={id=1503,name='Bloodied Bat Fur'},pop_items={}},
+         }},
+        {name='Ironclad Pulverizer',pos='K-13',conflux=6,
+         goal_drops={},
          atma={'Atma of the Razed Ruins'},trusts={'TBD'},
          chain={
-             {nm='Ironclad Observer',pos='K-13',timed=false,ki={id=1506,name='Scalding Ironclad Spike'},
-              pop_items={{name='Spheroid Plate',from='Observer',from_pos='K-L/12-14'}}},
-             {nm='Abyssic Cluster',pos='H-12',timed=true,ki={id=1507,name='Blazing Cluster Soul'},pop_items={}},
+             {nm='Ironclad Observer',pos='K-13',conflux=8,timed=false,ki={id=1506,name='Scalding Ironclad Spike'},
+              pop_items={{id=nil,name='Spheroid Plate',from='Observer',from_pos='F-8',from_conflux=6}}},
+             {nm='Abyssic Cluster',pos='H-12',conflux=7,timed=true,ki={id=1507,name='Blazing Cluster Soul'},pop_items={}},
          }},
     },
+        {name='Karkatakam',pos='I-5',conflux=5,
+         goal_drops={},atma={},trusts={'TBD'},
+         chain={
+             {nm='Karkatakam',pos='I-5',conflux=5,timed=false,ki={id=nil,name='(direct pop)'},
+              pop_items={
+                  {id=3093,name='H.Q. Crab Meat',from='Gasher',from_pos='H-5',from_conflux=5},
+                  {id=3094,name='H.Q. Rock Salt',from='Slasher',from_pos='H-5',from_conflux=5},
+              }},
+         }},
+        {name='Avalerion',pos='G-8',conflux=6,
+         goal_drops={},atma={},trusts={'TBD'},
+         chain={
+             {nm='Avalerion',pos='G-8',conflux=6,timed=false,ki={id=nil,name='(direct pop)'},
+              pop_items={{id=3092,name='Mocking Beak',from='Coastal Colibri',from_pos='H-8',from_conflux=6}}},
+         }},
+        {name='Nehebkau',pos='I-11',conflux=7,
+         goal_drops={},atma={},trusts={'TBD'},
+         chain={
+             {nm='Nehebkau',pos='I-11',conflux=7,timed=false,ki={id=nil,name='(direct pop)'},
+              pop_items={{id=3091,name='Hd. Raptor Skin',from='Atrociraptor',from_pos='I-11',from_conflux=7}}},
+         }},
+        {name='Nonno',pos='L-11',conflux=8,
+         goal_drops={},atma={},trusts={'TBD'},
+         chain={
+             {nm='Nonno',pos='L-11',conflux=8,timed=false,ki={id=nil,name='(direct pop)'},
+              pop_items={{id=3095,name='Worm-Eaten Bud',from='Orapodium',from_pos='L-11',from_conflux=8}}},
+         }},
+        {name='Npfundlwa',pos='J-8',conflux=2,
+         goal_drops={},atma={},trusts={'TBD'},
+         chain={
+             {nm='Npfundlwa',pos='J-8',conflux=2,timed=false,ki={id=nil,name='(direct pop)'},
+              pop_items={{id=3097,name='Blk. Rabbit Tail',from='Limestone Hare',from_pos='J-8',from_conflux=2}}},
+         }},
+        {name='Tuskertrap',pos='G-4',conflux=5,
+         goal_drops={},atma={},trusts={'TBD'},
+         chain={
+             {nm='Tuskertrap',pos='G-4',conflux=5,timed=false,ki={id=nil,name='(direct pop)'},
+              pop_items={{id=3096,name='Spotted Flyfrond',from='Boartrap',from_pos='G-4',from_conflux=5}}},
+         }},
 }

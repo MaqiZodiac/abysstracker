@@ -43,7 +43,7 @@ local T = {
     LAVNDR={190,165,255},GREEN={70,220,70},RED={220,70,70},
     CYAN={80,220,200},GREY={130,130,150},BLUE={110,160,255},
     LTBLUE={150,195,255},YELLOW={240,220,80},PINK={255,140,180},
-    FONT='Tahoma',SZ=11,SZ_H=12,PAD_X=8,PAD_Y=5,ROW_H=17,HDR_H=44,WIDTH=450,
+    FONT='Tahoma',SZ=11,SZ_H=12,PAD_X=8,PAD_Y=5,ROW_H=17,HDR_H=30,TITLE_H=20,WIDTH=450,
 }
 
 --==================================================================================================
@@ -53,7 +53,6 @@ local defaults = {
     display={pos_x=1200,pos_y=160,bg_alpha=200,minimized=false,show_cfg=false,font_size=11,draggable=true,width=450},
     session={last_zone='Abyssea - Tahrongi',last_nm='Chloris',last_view='tree'},
     collapse={},conflux={},atma={},
-    map={visible=false,position='right',size=500},
     trust_set={},  -- { ['Chloris']='chloris_set', ['Glavoid']='glavoid_set' }
 }
 
@@ -63,15 +62,15 @@ local defaults = {
 local settings={} local zones={} local zone_list={}
 local all_prims={} local all_texts={} local hot_zones={}
 local drag={active=false,sx=0,sy=0,ox=0,oy=0}
-local key_state={ctrl=false,alt=false,shift=false}
-local map_ctx={created=false,loaded_key=nil,last_size=nil}
-local MAP_PRIM='at_map_img'; local MAP_BORDER='at_map_border'
-local key_state={ctrl=false,alt=false,shift=false}
+local key_state={ctrl=false,alt=false}
 local state={
     view='zone_menu',zone=nil,nm=nil,
-    show_footer=false,map_visible=false,footer_entry=nil,
+    show_footer=false,footer_entry=nil,
     inv={},ki={},
-    minimized=false,px=1200,py=160,panel_h=100
+    minimized=false,px=1200,py=160,panel_h=100,
+    drop_source_item=nil,    -- item name string for drop_sources view
+    drop_source_back=nil,    -- view name to return to from drop_sources
+    active_job=nil,          -- selected job tab in plus1 view
 }
 
 -- Debug overlay
@@ -100,7 +99,13 @@ end
 --==================================================================================================
 -- ZONE LOADING
 --==================================================================================================
-local zone_files={'tahrongi','latheine','konschtat','misareaux','vunkerl','attowha','grauberg','altepa','uleguerand'}
+local zone_files={'tahrongi','latheine','konschtat','attohwa','misareaux','vunkerl','grauberg','altepa','uleguerand'}
+local drops_db={}
+local function load_drops_db()
+    local fn=loadfile(windower.addon_path..'data/abyssea_drops.lua')
+    if fn then local ok,d=pcall(fn); if ok and d then drops_db=d end end
+end
+
 local function load_zones()
     zones={};zone_list={}
     for _,f in ipairs(zone_files) do
@@ -111,6 +116,113 @@ local function load_zones()
     end
 end
 
+-- Dead-end boss overrides: these are popped by chain NM KIs but lead nowhere useful
+-- They show as T3 (not T4) because they don't feed a T5 boss
+local BOSS_TIER_OVERRIDE={
+    ['Dragua']=3, ['Bennu']=3,       -- Altepa dead-ends
+    ['Ironclad Smiter']=3,            -- Altepa chain NM, feeds Rani
+    ['Rani']=4,                       -- Altepa T4 (override cross-boss T5 detection)
+}
+
+-- Determine tier of a boss NM entry
+local function boss_tier(nm, zone)
+    -- Explicit overrides for structural edge cases
+    if BOSS_TIER_OVERRIDE[nm.name] then return BOSS_TIER_OVERRIDE[nm.name] end
+
+    if not nm.chain or #nm.chain==0 then return 4 end
+
+    -- Build boss name set for cross-boss detection
+    local boss_names={}
+    for _,n in ipairs(zone.nms) do boss_names[n.name]=true end
+
+    -- T5: any chain entry references another REAL T4 boss (not an overridden T3)
+    for _,ce in ipairs(nm.chain) do
+        if boss_names[ce.nm] and ce.nm~=nm.name and not BOSS_TIER_OVERRIDE[ce.nm] then
+            return 5
+        end
+    end
+
+    -- Self-referencing chain (direct-pop standalone NM) → T2 or T3
+    if #nm.chain==1 and nm.chain[1].nm==nm.name then
+        local ce=nm.chain[1]
+        local ni=ce.pop_items and #ce.pop_items or 0
+        local has_ki=ce.ki and ce.ki.id and type(ce.ki.id)=='number' and ce.ki.id~=0
+        if ni>=2 or has_ki then return 3 end
+        return 2
+    end
+
+    return 4
+end
+
+-- Determine tier of a chain entry
+local function chain_tier(entry)
+    local has_real_ki = entry.ki and entry.ki.id and entry.ki.id~=0 and entry.ki.id~='nil'
+    if has_real_ki then return 3 end
+    local n_items = entry.pop_items and #entry.pop_items or 0
+    if n_items >= 2 then return 3 end
+    return 2
+end
+
+-- Tier colours
+local TIER_COL = {
+    [1]=T.BLUE,   -- T1 General Mob
+    [2]=T.CYAN,   -- T2 Unique NM
+    [3]=T.ORANGE, -- T3 Chained NM
+    [4]=T.GOLD,   -- T4 Key NM
+    [5]=T.RED,    -- T5 Boss NM
+}
+local TIER_LBL = {[1]='T1',[2]='T2',[3]='T3',[4]='T4',[5]='T5'}
+
+-- Build a sorted flat entity list and reverse-lookup for a zone
+-- Returns: flat_entities (sorted T5->T4->T3->T2->T1), reverse_map (name->parent info)
+local function build_zone_index(zone)
+    local entities = {}   -- {name, pos, tier, kind='boss'|'chain'|'mob', ref, parent_nm, parent_boss}
+    local reverse  = {}   -- name -> {boss=nm, chain_entry=ce} or {chain=ce, boss=nm}
+    local seen     = {}
+
+    local function add(e) if not seen[e.name] then seen[e.name]=true; entities[#entities+1]=e end end
+
+    for _,nm in ipairs(zone.nms) do
+        local t=boss_tier(nm,zone)
+        add({name=nm.name, pos=nm.pos, tier=t, kind='boss', ref=nm})
+
+        for _,ce in ipairs(nm.chain or {}) do
+            -- chain NM itself
+            if ce.nm and ce.nm~=nm.name then
+                local ct=chain_tier(ce)
+                add({name=ce.nm, pos=ce.pos, tier=ct, kind='chain', ref=ce, parent_boss=nm})
+                -- reverse: chain NM -> boss that needs its KI
+                if not reverse[ce.nm] then reverse[ce.nm]={} end
+                reverse[ce.nm][#reverse[ce.nm]+1]={boss=nm, via_ki=ce.ki}
+            end
+            -- pop mobs (T1) and forced intermediate NMs (T2)
+            for _,pi in ipairs(ce.pop_items or {}) do
+                if pi.from then
+                    local has_sub = pi.pop_items and #pi.pop_items>0
+                    local tier = has_sub and 2 or 1
+                    add({name=pi.from, pos=pi.from_pos, tier=tier, kind='mob',
+                         ref=pi, parent_chain=ce, parent_boss=nm})
+                    if not reverse[pi.from] then reverse[pi.from]={} end
+                    reverse[pi.from][#reverse[pi.from]+1]={chain=ce, boss=nm, for_item=pi.name}
+                    -- sub-sources of intermediate forced NMs
+                    for _,sub in ipairs(pi.pop_items or {}) do
+                        if sub.from then
+                            add({name=sub.from, pos=sub.from_pos, tier=1, kind='mob',
+                                 ref=sub, parent_chain=ce, parent_boss=nm})
+                            if not reverse[sub.from] then reverse[sub.from]={} end
+                            reverse[sub.from][#reverse[sub.from]+1]={forced_nm=pi.from, chain=ce, boss=nm, for_item=sub.name}
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Sort: T5 first, then T4, T3, T2, T1
+    table.sort(entities, function(a,b) return a.tier > b.tier end)
+    return entities, reverse
+end
+
 --==================================================================================================
 -- SETTINGS
 --==================================================================================================
@@ -118,7 +230,6 @@ local function save_settings()
     if state.zone then settings.session.last_zone=state.zone.zone_name end
     if state.nm   then settings.session.last_nm=state.nm.name end
     settings.display.minimized=state.minimized
-    settings.map.visible=state.map_visible
     settings.display.pos_x=state.px;settings.display.pos_y=state.py
     settings.display.width=T.WIDTH
     config.save(settings)
@@ -139,10 +250,6 @@ local function load_settings()
         for _,nm in ipairs(z.nms) do if nm.name==settings.session.last_nm then state.nm=nm;break end end
     end
     state.view=state.nm and 'nm_view' or 'zone_menu'
-    if not settings.map then settings.map={visible=false,position='right',size=500} end
-    if not settings.map.size then settings.map.size=500 end
-    settings.map.large=nil
-    state.map_visible=settings.map.visible
 end
 
 --==================================================================================================
@@ -183,30 +290,6 @@ local function refresh_key_items()
 end
 local function get_count(name) return state.inv[name:lower()] or 0 end
 local function has_ki(id) return id and id~=0 and state.ki[id]==true end
-
---==================================================================================================
--- MAP CALIBRATION
--- grid coords (gx0,gy0)=pixel of col-A/row-1 center, (gx1,gy1)=last col/row center
--- nc/nr = number of columns/rows in the grid (A=col0 ... last=nc-1)
---==================================================================================================
-local ZONE_MAP={
-    ['tahrongi']  ={file='tahrongi',  iw=600,ih=600,gx0=77,gy0=76,gx1=521,gy1=528,nc=14,nr=14},
-    ['latheine']  ={file='latheine',  iw=600,ih=600,gx0=77,gy0=76,gx1=521,gy1=528,nc=14,nr=14},
-    ['konschtat'] ={file='konschtat', iw=600,ih=600,gx0=77,gy0=76,gx1=521,gy1=528,nc=14,nr=14},
-    ['attohwa']   ={file='attohwa',   iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
-    ['misareaux'] ={file='misareaux', iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
-    ['vunkerl']   ={file='vunkerl',   iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
-    ['grauberg']  ={file='grauberg',  iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
-    ['altepa']    ={file='altepa',    iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
-    ['uleguerand']={file='uleguerand',iw=600,ih=600,gx0=59,gy0=59,gx1=525,gy1=525,nc=13,nr=13},
-}
-local ZONE_TO_KEY={
-    ['Abyssea - Tahrongi']  ='tahrongi',  ['Abyssea - La Theine'] ='latheine',
-    ['Abyssea - Konschtat'] ='konschtat', ['Abyssea - Misareaux'] ='misareaux',
-    ['Abyssea - Vunkerl']   ='vunkerl',   ['Abyssea - Attohwa']   ='attohwa',
-    ['Abyssea - Grauberg']  ='grauberg',  ['Abyssea - Altepa']    ='altepa',
-    ['Abyssea - Uleguerand']='uleguerand',
-}
 
 -- Per-zone label colors (muted, distinct)
 local ZONE_COLORS={
@@ -280,67 +363,6 @@ local function txt(x,y,w,h,rgb,sz,bold,str,on_left,dtype,ref)
     return #all_texts
 end
 
-local function destroy_map()
-    if map_ctx.created then
-        pcall(windower.prim.delete, MAP_PRIM)
-        pcall(windower.prim.delete, MAP_BORDER)
-        map_ctx.created=false; map_ctx.loaded_key=nil; map_ctx.last_size=nil
-    end
-end
-
-local function update_map_display()
-    if not state.map_visible or not state.zone then
-        if map_ctx.created then
-            pcall(function() windower.prim.set_visibility(MAP_PRIM,   false) end)
-            pcall(function() windower.prim.set_visibility(MAP_BORDER, false) end)
-        end
-        return
-    end
-    local zkey=ZONE_TO_KEY[state.zone.zone_name]
-    local zm=zkey and ZONE_MAP[zkey]
-    if not zm then return end
-    local mpos=settings.map.position; local ms=settings.map.size
-    local mw,mh=ms,ms
-    local mx,my
-    if     mpos=='right'  then mx=state.px+T.WIDTH+4; my=state.py
-    elseif mpos=='left'   then mx=state.px-mw-4;      my=state.py
-    elseif mpos=='bottom' then mx=state.px;            my=state.py+state.panel_h+4
-    else                       mx=state.px;            my=state.py-mh-4 end
-    -- Create persistent prims once
-    if not map_ctx.created then
-        windower.prim.create(MAP_BORDER)
-        windower.prim.set_color(MAP_BORDER,240,8,8,15)
-        windower.prim.create(MAP_PRIM)
-        windower.prim.set_color(MAP_PRIM,255,255,255,255)
-        map_ctx.created=true
-    end
-    -- Always reposition (handles drag, panel resize)
-    windower.prim.set_position(MAP_BORDER, mx-2, my-2)
-    windower.prim.set_size(MAP_BORDER, mw+4, mh+4)
-    windower.prim.set_visibility(MAP_BORDER, true)
-    windower.prim.set_position(MAP_PRIM, mx, my)
-    windower.prim.set_visibility(MAP_PRIM, true)
-    -- Only reload texture when zone actually changes
-    local size_changed=(map_ctx.last_size~=ms)
-    if zkey~=map_ctx.loaded_key then
-        map_ctx.loaded_key=zkey
-        map_ctx.last_size=ms
-        windower.prim.set_texture(MAP_PRIM, windower.addon_path..'maps/'..zm.file..'.bmp')
-        windower.prim.set_size(MAP_PRIM, mw, mh)
-        -- Deferred set_size after async texture load (only needed on first load)
-        coroutine.schedule(function()
-            pcall(function() windower.prim.set_size(MAP_PRIM,mw,mh) end)
-        end, 0.15)
-    elseif size_changed then
-        -- Size changed but same zone: texture already loaded, just resize
-        map_ctx.last_size=ms
-        windower.prim.set_size(MAP_PRIM, mw, mh)
-    else
-        -- Same zone, same size: just ensure correct size (covers drag redraws)
-        windower.prim.set_size(MAP_PRIM, mw, mh)
-    end
-end
-
 local function destroy_all()
     for _,n in ipairs(all_prims) do pcall(windower.prim.delete,n) end
     for _,t in ipairs(all_texts) do pcall(function() t.obj:destroy() end) end
@@ -361,12 +383,14 @@ local function chain_ki_status(nm)
 end
 
 local function zone_pop_status(zone)
-    -- Returns ready,total  where ready = bosses with all KIs obtained
+    -- Returns ready,total where total = bosses that need KIs, ready = those with all KIs obtained
     local ready,total=0,0
     for _,nm in ipairs(zone.nms) do
-        total=total+1
         local kh,kt=chain_ki_status(nm)
-        if kt==0 or kh==kt then ready=ready+1 end
+        if kt>0 then  -- Only count bosses that require KIs (T4/T5); skip T2/T3 direct-pops
+            total=total+1
+            if kh==kt then ready=ready+1 end
+        end
     end
     return ready,total
 end
@@ -428,7 +452,7 @@ local function build_ui()
     local px=state.px;local py=state.py;local pw=T.WIDTH;local cy=py
 
     -- BG created FIRST — renders behind everything
-    local bg_prim=prim(px,py+T.HDR_H,pw,2000,settings.display.bg_alpha,T.BG_R,T.BG_G,T.BG_B)
+    local bg_prim=prim(px,py+T.HDR_H+T.TITLE_H,pw,2000,settings.display.bg_alpha,T.BG_R,T.BG_G,T.BG_B)
 
     -- Click shield: a draggable transparent texts object covering the whole panel.
     -- texts lib returns true for type==1 on draggable objects, blocking FFXI clicks.
@@ -446,53 +470,55 @@ local function build_ui()
     state.shield:show()
     all_texts[#all_texts+1]={obj=state.shield,dtype=nil,ref=nil,fill_prim=nil}
 
-        -- HEADER — row 1: "Abyssea Tracker" centred (no hotzone = full row draggable)
-    --           row 2: crumb left, buttons right
-    prim(px,cy,pw,T.HDR_H,math.min(255,settings.display.bg_alpha+60),T.HDR_R,T.HDR_G,T.HDR_B)
-    local title_w=math.floor(15*T.SZ_H*0.58)  -- approx pixel width of 'Abyssea Tracker'
-    txt(px+math.floor((pw-title_w)/2),cy+2,title_w+4,16,T.GOLD,T.SZ_H,true,'Abyssea Tracker')
-    local ry=cy+24  -- row 2 y position
+    -- TITLE ROW — drag zone, centred app name
+    prim(px,cy,pw,T.TITLE_H,T.HDR_A,T.HDR_R,T.HDR_G,T.HDR_B)
+    local title_str='Abyssea Tracker'
+    local title_sz=T.SZ_H+2
+    local title_approx_w=math.floor(#title_str*title_sz*0.55)
+    local title_x=px+math.floor((pw-title_approx_w)/2)
+    txt(title_x,cy+2,title_approx_w+10,T.TITLE_H-2,T.GOLD,title_sz,true,title_str,
+        function() state.view='zone_menu';state.nm=nil;state.show_footer=false;state.footer_entry=nil;
+                   state.drop_source_item=nil;state.drop_source_back=nil;build_ui() end)
+    cy=cy+T.TITLE_H
+
+    -- NAV ROW — breadcrumb + buttons
+    prim(px,cy,pw,T.HDR_H,T.HDR_A,math.floor(T.HDR_R*0.7),math.floor(T.HDR_G*0.7),math.floor(T.HDR_B*0.7))
+    local by=cy+math.floor((T.HDR_H-T.SZ)/2)-1
     local crumb=''
     if state.view=='zone_menu' then crumb='Select Zone'
     elseif state.view=='overview' then crumb='Drop Overview'
+    elseif state.view=='plus1' then crumb='Drop Overview > Armor +1'
+    elseif state.view=='plus2' then crumb='Drop Overview > Armor +2'
+    elseif state.view=='drop_sources' then crumb='Sources: '..(state.drop_source_item or '?')
     elseif state.view=='nm_list' and state.zone then crumb=state.zone.zone_name:gsub('Abyssea %- ','')
+    elseif state.view=='entity_view' and state.entity then
+        crumb=(state.zone and state.zone.zone_name:gsub('Abyssea %- ','') or '')..' > '..state.entity.name
     elseif state.view=='nm_view' and state.zone and state.nm then
         crumb=state.zone.zone_name:gsub('Abyssea %- ','')..' > '..state.nm.name end
-    txt(px+T.PAD_X,ry,pw-213,16,T.WHITE,T.SZ,false,crumb,
+    txt(px+T.PAD_X,by,pw-220,T.HDR_H,T.WHITE,T.SZ,false,crumb,
         function()
             if state.view=='nm_view' then state.view='nm_list';state.nm=nil;state.show_footer=false;build_ui()
+            elseif state.view=='entity_view' then state.view='nm_list';state.entity=nil;build_ui()
             elseif state.view=='nm_list' then state.view='zone_menu';state.zone=nil;build_ui()
+            elseif state.view=='drop_sources' then state.view=state.drop_source_back or 'overview';state.drop_source_item=nil;build_ui()
+            elseif state.view=='plus1' or state.view=='plus2' then state.view='overview';build_ui()
             elseif state.view=='overview' then state.view='zone_menu';build_ui() end
         end)
     local vlbl=(settings.session.last_view=='tree') and '[Tree]' or '[List]'
-    txt(px+pw-204,ry,48,16,T.BLUE,T.SZ,false,vlbl,
+    txt(px+pw-140,by,46,T.HDR_H,T.BLUE,T.SZ,false,vlbl,
         function() settings.session.last_view=(settings.session.last_view=='tree') and 'list' or 'tree';save_settings();build_ui() end)
-    local map_col=state.map_visible and {80,220,200} or {130,130,150}
-    txt(px+pw-152,ry,40,16,map_col,T.SZ,true,'[Map]',
-        function()
-            state.map_visible=not state.map_visible
-            if not state.map_visible then destroy_map() end
-            save_settings();build_ui()
-        end)
     local cfg_col=settings.display.show_cfg and T.YELLOW or T.GREY
-    txt(px+pw-107,ry,36,16,cfg_col,T.SZ,false,'[Cfg]',
+    txt(px+pw-92,by,32,T.HDR_H,cfg_col,T.SZ,false,'[Cfg]',
         function() settings.display.show_cfg=not settings.display.show_cfg;save_settings();build_ui() end)
-    txt(px+pw-66,ry,22,16,T.GREY,T.SZ,false,'[R]',
+    txt(px+pw-56,by,22,T.HDR_H,T.GREY,T.SZ,false,'[R]',
         function() refresh_inventory();refresh_key_items();refresh_data() end)
-    txt(px+pw-38,ry,26,16,T.GREY,T.SZ,false,state.minimized and '[+]' or '[-]',
-        function()
-            state.minimized=not state.minimized
-            if state.minimized then
-                pcall(function() windower.prim.set_visibility(MAP_PRIM,false) end)
-                pcall(function() windower.prim.set_visibility(MAP_BORDER,false) end)
-            end
-            save_settings();build_ui()
-        end)
+    txt(px+pw-30,by,24,T.HDR_H,T.GREY,T.SZ,false,state.minimized and '[+]' or '[-]',
+        function() state.minimized=not state.minimized;save_settings();build_ui() end)
     cy=cy+T.HDR_H
 
     if state.minimized then
         windower.prim.set_size(bg_prim,pw,2);windower.prim.set_position(bg_prim,px,cy)
-        state.panel_h=T.HDR_H+2;return
+        state.panel_h=T.HDR_H+T.TITLE_H+2;return
     end
 
     local content_start=cy;cy=cy+T.PAD_Y
@@ -504,39 +530,24 @@ local function build_ui()
 
     -- CFG block
     if settings.display.show_cfg then
-        sep()
-        txt(px+T.PAD_X,cy+2,pw,T.ROW_H,T.GOLD,T.SZ,true,'Settings')
+        prim(px,cy,pw,T.ROW_H*5+16,T.CFG_A,T.CFG_R,T.CFG_G,T.CFG_B)
+        txt(px+T.PAD_X,cy+2,pw*0.45,T.ROW_H,T.GOLD,T.SZ,true,'Settings')
+        txt(px+pw*0.5,cy+2,pw*0.5,T.ROW_H,T.GREY,T.SZ,false,'Scroll shortcuts:')
         cy=cy+T.ROW_H
-        local B1=T.PAD_X+112; local B2=B1+26; local BH=pw-T.PAD_X-B2-26
-        txt(px+T.PAD_X,cy,110,T.ROW_H,T.WHITE,T.SZ,false,'Opacity: '..settings.display.bg_alpha)
-        txt(px+B1,cy,24,T.ROW_H,T.GREEN,T.SZ,true,'[+]',function() settings.display.bg_alpha=math.min(245,settings.display.bg_alpha+20);save_settings();build_ui() end)
-        txt(px+B2,cy,24,T.ROW_H,T.RED,T.SZ,true,'[-]',function() settings.display.bg_alpha=math.max(20,settings.display.bg_alpha-20);save_settings();build_ui() end)
-        txt(px+pw-T.PAD_X-60,cy,60,T.ROW_H,T.GREY,T.SZ,false,'Scroll')
+        txt(px+T.PAD_X,cy,90,T.ROW_H,T.WHITE,T.SZ,false,'Opacity: '..settings.display.bg_alpha)
+        txt(px+T.PAD_X+100,cy,24,T.ROW_H,T.GREEN,T.SZ,true,'[+]',function() settings.display.bg_alpha=math.min(245,settings.display.bg_alpha+20);save_settings();build_ui() end)
+        txt(px+T.PAD_X+126,cy,24,T.ROW_H,T.RED,T.SZ,true,'[-]',function() settings.display.bg_alpha=math.max(20,settings.display.bg_alpha-20);save_settings();build_ui() end)
+        txt(px+pw*0.5,cy,pw*0.5,T.ROW_H,T.GREY,T.SZ,false,'Scroll = Opacity')
         cy=cy+T.ROW_H
-        txt(px+T.PAD_X,cy,110,T.ROW_H,T.WHITE,T.SZ,false,'Font sz: '..T.SZ)
-        txt(px+B1,cy,24,T.ROW_H,T.GREEN,T.SZ,true,'[+]',function() settings.display.font_size=math.min(16,settings.display.font_size+1);T.SZ=settings.display.font_size;T.SZ_H=T.SZ+1;T.ROW_H=T.SZ+6;save_settings();build_ui() end)
-        txt(px+B2,cy,24,T.ROW_H,T.RED,T.SZ,true,'[-]',function() settings.display.font_size=math.max(8,settings.display.font_size-1);T.SZ=settings.display.font_size;T.SZ_H=T.SZ+1;T.ROW_H=T.SZ+6;save_settings();build_ui() end)
-        txt(px+pw-T.PAD_X-80,cy,80,T.ROW_H,T.GREY,T.SZ,false,'Alt+Scroll')
+        txt(px+T.PAD_X,cy,90,T.ROW_H,T.WHITE,T.SZ,false,'Font sz: '..T.SZ)
+        txt(px+T.PAD_X+100,cy,24,T.ROW_H,T.GREEN,T.SZ,true,'[+]',function() settings.display.font_size=math.min(16,settings.display.font_size+1);T.SZ=settings.display.font_size;T.SZ_H=T.SZ+1;T.ROW_H=T.SZ+6;save_settings();build_ui() end)
+        txt(px+T.PAD_X+126,cy,24,T.ROW_H,T.RED,T.SZ,true,'[-]',function() settings.display.font_size=math.max(8,settings.display.font_size-1);T.SZ=settings.display.font_size;T.SZ_H=T.SZ+1;T.ROW_H=T.SZ+6;save_settings();build_ui() end)
+        txt(px+pw*0.5,cy,pw*0.5,T.ROW_H,T.GREY,T.SZ,false,'Alt+Scroll = Font Size')
         cy=cy+T.ROW_H
-        txt(px+T.PAD_X,cy,110,T.ROW_H,T.WHITE,T.SZ,false,'Width: '..T.WIDTH)
-        txt(px+B1,cy,24,T.ROW_H,T.GREEN,T.SZ,true,'[+]',function() T.WIDTH=math.min(600,T.WIDTH+20);save_settings();build_ui() end)
-        txt(px+B2,cy,24,T.ROW_H,T.RED,T.SZ,true,'[-]',function() T.WIDTH=math.max(300,T.WIDTH-20);save_settings();build_ui() end)
-        txt(px+pw-T.PAD_X-90,cy,90,T.ROW_H,T.GREY,T.SZ,false,'Ctrl+Scroll')
-        cy=cy+T.ROW_H
-        local map_pos=settings.map and settings.map.position or 'right'
-        local map_sz =settings.map and settings.map.size   or 500
-        txt(px+T.PAD_X,cy,110,T.ROW_H,T.WHITE,T.SZ,false,'Map pos: '..map_pos)
-        txt(px+B1,cy,52,T.ROW_H,{80,220,200},T.SZ,true,'[pos]',
-            function()
-                local p={['right']='bottom',['bottom']='left',['left']='top',['top']='right'}
-                settings.map.position=p[settings.map.position] or 'right'
-                save_settings();build_ui()
-            end)
-        cy=cy+T.ROW_H
-        txt(px+T.PAD_X,cy,110,T.ROW_H,T.WHITE,T.SZ,false,'Map sz: '..map_sz..'px')
-        txt(px+B1,cy,24,T.ROW_H,T.GREEN,T.SZ,true,'[+]',function() settings.map.size=math.min(1000,settings.map.size+50);save_settings();build_ui() end)
-        txt(px+B2,cy,24,T.ROW_H,T.RED,T.SZ,true,'[-]',function() settings.map.size=math.max(100,settings.map.size-50);save_settings();build_ui() end)
-        txt(px+pw-T.PAD_X-100,cy,100,T.ROW_H,T.GREY,T.SZ,false,'Shift+Scroll')
+        txt(px+T.PAD_X,cy,90,T.ROW_H,T.WHITE,T.SZ,false,'Width: '..T.WIDTH)
+        txt(px+T.PAD_X+100,cy,24,T.ROW_H,T.GREEN,T.SZ,true,'[+]',function() T.WIDTH=math.min(600,T.WIDTH+20);save_settings();build_ui() end)
+        txt(px+T.PAD_X+126,cy,24,T.ROW_H,T.RED,T.SZ,true,'[-]',function() T.WIDTH=math.max(300,T.WIDTH-20);save_settings();build_ui() end)
+        txt(px+pw*0.5,cy,pw*0.5,T.ROW_H,T.GREY,T.SZ,false,'Ctrl+Scroll = Width')
         cy=cy+T.ROW_H+4;sep()
     end
 
@@ -557,6 +568,7 @@ local function build_ui()
     local function show_info_footer(entry_nm, entry_atma)
         -- Show atma effects from db, then trust set with summon button
         sep()
+        prim(px,cy,pw,T.ROW_H+2,T.FTR_A,T.FTR_R,T.FTR_G,T.FTR_B)
         txt(px+T.PAD_X,cy+1,pw,T.ROW_H,T.GOLD,T.SZ,true,'-- '..entry_nm..' --');cy=cy+T.ROW_H+2
 
         -- Atma effects
@@ -691,13 +703,13 @@ local function build_ui()
     if state.view=='zone_menu' then
         -- Overview button
         hovbg(px+T.PAD_X+4,cy,pw-T.PAD_X-4,T.ROW_H)
-        txt(px+T.PAD_X+8,cy,pw-T.PAD_X-8,T.ROW_H,T.CYAN,T.SZ,true,'◆ Drop Overview',
+        txt(px+T.PAD_X+8,cy,pw-T.PAD_X-8,T.ROW_H,T.CYAN,T.SZ,true,'>> Drop Overview',
             function() state.view='overview';build_ui() end)
         cy=cy+T.ROW_H+4; sep()
         local groups={
-            {'Vision of Abyssea',{'Abyssea - La Theine','Abyssea - Konschtat','Abyssea - Tahrongi'}},
-            {'Scars of Abyssea', {'Abyssea - Misareaux','Abyssea - Vunkerl','Abyssea - Attohwa'}},
-            {'Heroes of Abyssea',{'Abyssea - Grauberg','Abyssea - Altepa','Abyssea - Uleguerand'}},
+            {'VISION OF ABYSSEA',{'Abyssea - La Theine','Abyssea - Konschtat','Abyssea - Tahrongi'}},
+            {'SCARS OF ABYSSEA', {'Abyssea - Misareaux','Abyssea - Vunkerl','Abyssea - Attohwa'}},
+            {'HEROES OF ABYSSEA',{'Abyssea - Grauberg','Abyssea - Altepa','Abyssea - Uleguerand'}},
         }
         for _,grp in ipairs(groups) do
             sec_hdr(grp[1])
@@ -708,10 +720,10 @@ local function build_ui()
                 if z then ready,total=zone_pop_status(z) end
                 local rc=(total>0 and ready==total) and T.GREEN or (ready>0 and T.YELLOW or T.RED)
                 hovbg(px+T.PAD_X+4,cy,pw-T.PAD_X-4,T.ROW_H)
-                txt(px+T.PAD_X+8,cy,pw-T.PAD_X-70,T.ROW_H,T.ORANGE,T.SZ,false,'▶ '..short,
+                txt(px+T.PAD_X+8,cy,pw-T.PAD_X-70,T.ROW_H,T.ORANGE,T.SZ,false,'>> '..short,
                     function() state.zone=zones[zname];state.view='nm_list';build_ui() end)
                 if total>0 then
-                    txt(px+pw-72,cy,66,T.ROW_H,rc,T.SZ,true,'['..ready..'/'..total..' pop]',
+                    txt(px+pw-64,cy,58,T.ROW_H,rc,T.SZ,true,'['..ready..'/'..total..' pop]',
                         function() state.zone=zones[zname];state.view='nm_list';build_ui() end)
                 end
                 cy=cy+T.ROW_H
@@ -719,119 +731,406 @@ local function build_ui()
         end
 
     elseif state.view=='overview' then
-        sec_hdr('Boss Drops — All Zones')
-
-        -- Collect trial items and currencies from all loaded zones
-        local trial_rows={}   -- {name, zone_short, nm_name}
-        local seen_trial={}
-        local currency_names={}
-        local seen_currency={}
+        -- ── shared helpers used by multiple views ─────────────────────────────
         local zone_order={'Abyssea - Tahrongi','Abyssea - La Theine','Abyssea - Konschtat',
                           'Abyssea - Misareaux','Abyssea - Vunkerl','Abyssea - Attohwa',
                           'Abyssea - Grauberg','Abyssea - Altepa','Abyssea - Uleguerand'}
+
+        sec_hdr('Boss Drops — All Zones')
+        local trial_rows={}; local seen_trial={}
         for _,zn in ipairs(zone_order) do
             local z=zones[zn]
             if z then
                 local zs=zn:gsub('Abyssea %- ','')
                 for _,nm in ipairs(z.nms) do
                     for _,gd in ipairs(nm.goal_drops or {}) do
-                        if gd.name~='TBD' then
-                            if is_currency(gd.name) then
-                                if not seen_currency[gd.name] then
-                                    seen_currency[gd.name]=true
-                                    currency_names[#currency_names+1]=gd.name
-                                end
-                            else
-                                local key=gd.name..'|'..zs..'|'..nm.name
-                                if not seen_trial[key] then
-                                    seen_trial[key]=true
-                                    trial_rows[#trial_rows+1]={name=gd.name,zone=zs,nm=nm.name}
-                                end
+                        if gd.name~='TBD' and not is_currency(gd.name) then
+                            local key=gd.name..'|'..zs..'|'..nm.name
+                            if not seen_trial[key] then
+                                seen_trial[key]=true
+                                trial_rows[#trial_rows+1]={name=gd.name,zone=zs,nm=nm.name,zfull=zn}
                             end
                         end
                     end
                 end
             end
         end
-
-        -- Trial items — clickable, navigate to nm_view
+        local hw=math.floor(pw*0.5)-T.PAD_X
         for _,row in ipairs(trial_rows) do
             local count=get_count(row.name)
-            local zcol=ZONE_COLORS['Abyssea - '..row.zone] or T.GREY
+            local zcol=ZONE_COLORS[row.zfull] or T.GREY
             local icol=drop_color(count)
-            local zname='Abyssea - '..row.zone
-            local nm_name=row.nm
-            local function go_nm()
-                state.zone=zones[zname]
-                if state.zone then
-                    for _,n in ipairs(state.zone.nms) do
-                        if n.name==nm_name then
-                            state.nm=n;state.view='nm_view';save_settings();build_ui();return
+            local zfull=row.zfull; local nm_name=row.nm; local iname=row.name
+            hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
+            txt(px+T.PAD_X,cy,hw,T.ROW_H,zcol,T.SZ,false,row.zone..' | '..nm_name,
+                function()
+                    state.zone=zones[zfull]
+                    if state.zone then
+                        for _,n in ipairs(state.zone.nms) do
+                            if n.name==nm_name then state.nm=n;state.view='nm_view';save_settings();build_ui();return end
                         end
                     end
-                end
-            end
-            local hw=math.floor(pw*0.5)-T.PAD_X
-            hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
-            txt(px+T.PAD_X,cy,hw,T.ROW_H,zcol,T.SZ,false,row.zone..' | '..nm_name,go_nm)
+                end)
             txt(px+T.PAD_X+hw,cy,pw-T.PAD_X-hw-4,T.ROW_H,icol,T.SZ,true,
-                row.name..' ('..count..')',go_nm,'farm',{name=row.name,type='item'})
+                iname..' ('..count..')',
+                function()
+                    state.drop_source_item=iname;state.drop_source_back='overview';state.view='drop_sources';build_ui()
+                end,'farm',{name=iname,type='item'})
             cy=cy+T.ROW_H
         end
+        cy=cy+T.PAD_Y;sep()
+        -- Nav links to subscreens
+        hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
+        txt(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H,T.CYAN,T.SZ,true,'>> Empyrean Armor +1',
+            function() state.view='plus1';build_ui() end)
+        cy=cy+T.ROW_H
+        hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
+        txt(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H,T.CYAN,T.SZ,true,'>> Empyrean Armor +2',
+            function() state.view='plus2';build_ui() end)
+        cy=cy+T.ROW_H
 
-        if #trial_rows>0 and #currency_names>0 then cy=cy+T.ROW_H end
+    elseif state.view=='plus1' then
+        -- ── EMPYREAN ARMOR +1 — seal tracking by job ─────────────────────────
+        if not drops_db or not drops_db.seals then load_drops_db() end
+        local db_seals=drops_db and drops_db.seals or {}
+        local job_order=drops_db and drops_db.job_display_order or {}
+        -- Filter to jobs that have at least one seal entry
+        local jobs_with_seals={}; local jobs_seen={}
+        for _,jb in ipairs(job_order) do
+            for _,s in ipairs(db_seals) do
+                if s.job==jb and not jobs_seen[jb] then
+                    jobs_seen[jb]=true; jobs_with_seals[#jobs_with_seals+1]=jb; break
+                end
+            end
+        end
+        -- Fallback: collect any jobs not in job_order
+        for _,s in ipairs(db_seals) do
+            if not jobs_seen[s.job] then
+                jobs_seen[s.job]=true; jobs_with_seals[#jobs_with_seals+1]=s.job
+            end
+        end
+        -- Active job tab
+        if not state.active_job or not jobs_seen[state.active_job] then
+            state.active_job=jobs_with_seals[1]
+        end
+        -- Job tab row
+        local tab_w=math.floor((pw-T.PAD_X*2)/math.min(#jobs_with_seals,10))
+        local tabs_per_row=math.floor((pw-T.PAD_X*2)/tab_w)
+        local row1={}; local row2={}
+        for i,jb in ipairs(jobs_with_seals) do
+            if i<=tabs_per_row then row1[#row1+1]=jb else row2[#row2+1]=jb end
+        end
+        prim(px,cy,pw,T.ROW_H+2,T.HDR_A,T.HDR_R,T.HDR_G,T.HDR_B)
+        for i,jb in ipairs(row1) do
+            local jcol=(jb==state.active_job) and T.YELLOW or T.GREY
+            local jb_cap=jb
+            txt(px+T.PAD_X+(i-1)*tab_w,cy,tab_w,T.ROW_H,jcol,T.SZ,true,'['..jb..']',
+                function() state.active_job=jb_cap;build_ui() end)
+        end
+        cy=cy+T.ROW_H+2
+        if #row2>0 then
+            prim(px,cy,pw,T.ROW_H+2,T.HDR_A,T.HDR_R,T.HDR_G,T.HDR_B)
+            for i,jb in ipairs(row2) do
+                local jcol=(jb==state.active_job) and T.YELLOW or T.GREY
+                local jb_cap=jb
+                txt(px+T.PAD_X+(i-1)*tab_w,cy,tab_w,T.ROW_H,jcol,T.SZ,true,'['..jb..']',
+                    function() state.active_job=jb_cap;build_ui() end)
+            end
+            cy=cy+T.ROW_H+2
+        end
+        sep()
+        -- Seal rows for active job, in slot order
+        local slot_order={'Head','Body','Hands','Legs','Feet'}
+        local col1=math.floor(pw*0.22); local col2=pw-T.PAD_X-col1-4
+        for _,slot in ipairs(slot_order) do
+            for _,s in ipairs(db_seals) do
+                if s.job==state.active_job and s.slot==slot then
+                    local count=get_count(s.name)
+                    local icol=drop_color(count)
+                    local iname=s.name
+                    hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
+                    txt(px+T.PAD_X,cy,col1,T.ROW_H,T.GREY,T.SZ,false,slot)
+                    txt(px+T.PAD_X+col1,cy,col2,T.ROW_H,icol,T.SZ,true,
+                        s.name..' ('..count..')',
+                        function()
+                            state.drop_source_item=iname;state.drop_source_back='plus1';state.view='drop_sources';build_ui()
+                        end,'farm',{name=s.name,type='item'})
+                    cy=cy+T.ROW_H
+                    break
+                end
+            end
+        end
 
-        -- Currency items — two-column layout
-        -- Left: Vision + Voyage  |  Right: Balance + Ardor
-        local left_series={
-            {'Vision', {'Vision Coin','Vision Stone','Vision Jewel','Vision Card'}},
-            {'Voyage', {'Voyage Coin','Voyage Stone','Voyage Jewel','Voyage Card'}},
-        }
-        local right_series={
-            {'Balance',{'Balance Stone','Balance Coin','Balance Jewel','Balance Card'}},
-            {'Ardor',  {'Ardor Stone','Ardor Coin','Ardor Jewel','Ardor Card'}},
-        }
+    elseif state.view=='plus2' then
+        -- ── EMPYREAN ARMOR +2 — currency tracking ─────────────────────────────
+        if not drops_db or not drops_db.currencies then load_drops_db() end
+        local db_currencies=drops_db and drops_db.currencies or {}
         local col_w=math.floor(pw/2)-T.PAD_X
-        local cy_left=cy; local cy_right=cy
         local lx=px+T.PAD_X; local rx=px+T.PAD_X+col_w+4
-        local function render_series_col(series_list, start_x, cy_ref)
+        local left_series={}; local right_series={}
+        for i,ser in ipairs(db_currencies) do
+            if i%2==1 then left_series[#left_series+1]=ser
+            else right_series[#right_series+1]=ser end
+        end
+        local function render_currency_col(series_list, start_x, cy_ref)
             local c=cy_ref
             for _,ser in ipairs(series_list) do
-                local any=false
-                for _,iname in ipairs(ser[2]) do if seen_currency[iname] then any=true;break end end
-                if any then
-                    txt(start_x,c,col_w,T.ROW_H,T.YELLOW,T.SZ,true,ser[1]); c=c+T.ROW_H
-                    for _,iname in ipairs(ser[2]) do
-                        if seen_currency[iname] then
-                            local count=get_count(iname)
-                            txt(start_x+10,c,col_w-10,T.ROW_H,drop_color(count),T.SZ,false,
-                                iname..' ('..count..')',nil,'farm',{name=iname,type='item'})
-                            c=c+T.ROW_H
-                        end
-                    end
-                    c=c+4
+                txt(start_x,c,col_w,T.ROW_H,T.YELLOW,T.SZ,true,ser.series); c=c+T.ROW_H
+                for _,itm in ipairs(ser.items or {}) do
+                    local iname=type(itm)=='table' and itm.name or itm
+                    local count=get_count(iname)
+                    local iname_cap=iname
+                    txt(start_x+10,c,col_w-10,T.ROW_H,drop_color(count),T.SZ,false,
+                        iname..' ('..count..')',
+                        function()
+                            state.drop_source_item=iname_cap;state.drop_source_back='plus2';state.view='drop_sources';build_ui()
+                        end,'farm',{name=iname,type='item'})
+                    c=c+T.ROW_H
                 end
+                c=c+4
             end
             return c
         end
-        cy_left=render_series_col(left_series,lx,cy)
-        cy_right=render_series_col(right_series,rx,cy)
-        cy=math.max(cy_left,cy_right)
+        local cy_l=render_currency_col(left_series,lx,cy)
+        local cy_r=render_currency_col(right_series,rx,cy)
+        cy=math.max(cy_l,cy_r)
+
+    elseif state.view=='drop_sources' and state.drop_source_item then
+        -- ── DROP SOURCES — all NMs that drop this item ────────────────────────
+        if not drops_db or not drops_db.seals then load_drops_db() end
+        local iname=state.drop_source_item
+        sec_hdr('Sources: '..iname)
+        sep()
+
+        -- Helper: navigate to an NM by searching all zones
+        local function go_entity_any(nm_name, preferred_zone)
+            -- Try preferred zone first
+            local function try_zone(zn)
+                local z=zones[zn]; if not z then return false end
+                local ok,flat,rev=pcall(build_zone_index,z)
+                if not ok then return false end
+                for _,ent in ipairs(flat) do
+                    if ent.name==nm_name then
+                        state.zone=z
+                        if ent.kind=='boss' then state.nm=ent.ref;state.view='nm_view'
+                        else state.entity=ent;state.entity_rev=rev;state.view='entity_view' end
+                        save_settings();build_ui();return true
+                    end
+                end
+                return false
+            end
+            if preferred_zone and try_zone(preferred_zone) then return end
+            local all_zones={'Abyssea - Tahrongi','Abyssea - La Theine','Abyssea - Konschtat',
+                             'Abyssea - Misareaux','Abyssea - Vunkerl','Abyssea - Attohwa',
+                             'Abyssea - Grauberg','Abyssea - Altepa','Abyssea - Uleguerand'}
+            for _,zn in ipairs(all_zones) do
+                if zn~=preferred_zone and try_zone(zn) then return end
+            end
+        end
+
+        -- Collect sources from seals, currencies, trinkets, goal_drops
+        local sources={}; local seen_src={}
+        local function add_src(nm_name, zone_name)
+            local k=zone_name..'|'..nm_name
+            if not seen_src[k] then seen_src[k]=true
+                sources[#sources+1]={zone=zone_name,nm=nm_name} end
+        end
+        -- Seals
+        for _,s in ipairs(drops_db and drops_db.seals or {}) do
+            if s.name==iname then
+                for _,src in ipairs(s.nms or {}) do add_src(src.nm,src.zone) end
+            end
+        end
+        -- Currencies (new per-item nms format)
+        for _,ser in ipairs(drops_db and drops_db.currencies or {}) do
+            for _,itm in ipairs(ser.items or {}) do
+                if type(itm)=='table' and itm.name==iname then
+                    for _,src in ipairs(itm.nms or {}) do add_src(src.nm,src.zone) end
+                end
+            end
+        end
+        -- Goal drops in all zone files
+        local all_zones={'Abyssea - Tahrongi','Abyssea - La Theine','Abyssea - Konschtat',
+                         'Abyssea - Misareaux','Abyssea - Vunkerl','Abyssea - Attohwa',
+                         'Abyssea - Grauberg','Abyssea - Altepa','Abyssea - Uleguerand'}
+        for _,zn in ipairs(all_zones) do
+            local z=zones[zn]; if z then
+                for _,nm in ipairs(z.nms) do
+                    for _,gd in ipairs(nm.goal_drops or {}) do
+                        if gd.name==iname then add_src(nm.name,zn) end
+                    end
+                end
+            end
+        end
+
+        if #sources==0 then
+            txt(px+T.PAD_X,cy,pw,T.ROW_H,T.GREY,T.SZ,false,'No sources found in data.');cy=cy+T.ROW_H
+        else
+            local hw=math.floor(pw*0.55)-T.PAD_X
+            for _,src in ipairs(sources) do
+                local zshort=src.zone:gsub('Abyssea %- ','')
+                local zcol=ZONE_COLORS[src.zone] or T.GREY
+                local zn_cap=src.zone; local nm_cap=src.nm
+                hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
+                txt(px+T.PAD_X,cy,hw,T.ROW_H,zcol,T.SZ,false,zshort..' | '..src.nm,
+                    function() go_entity_any(nm_cap,zn_cap) end)
+                txt(px+T.PAD_X+hw,cy,pw-T.PAD_X-hw-4,T.ROW_H,T.CYAN,T.SZ,true,'[>>]',
+                    function() go_entity_any(nm_cap,zn_cap) end)
+                cy=cy+T.ROW_H
+            end
+        end
 
     elseif state.view=='nm_list' and state.zone then
         sec_hdr(state.zone.zone_name);sep()
-        for _,nm in ipairs(state.zone.nms) do
-            local kh,kt=chain_ki_status(nm)
-            local kc=(kh==kt and kt>0) and T.GREEN or (kt>0 and T.RED or T.GREY)
-            local nm_ref=nm
-            hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
-            txt(px+T.PAD_X+4,cy,pw-120,T.ROW_H,T.ORANGE,T.SZ,false,'▶ '..nm.name..' ('..(nm.pos or '?')..')',
-                function() state.nm=nm_ref;state.view='nm_view';save_settings();build_ui() end)
-            if kt>0 then
-                txt(px+pw-84,cy,74,T.ROW_H,kc,T.SZ,true,'['..kh..'/'..kt..' KI]',
-                    function() state.nm=nm_ref;state.view='nm_view';save_settings();build_ui() end)
+        local ok_idx,flat,rev
+        ok_idx,flat,rev=pcall(build_zone_index,state.zone)
+        if not ok_idx then
+            -- flat contains the error message when pcall fails
+            txt(px+T.PAD_X,cy,pw,T.ROW_H,T.RED,T.SZ,false,'Index error: '..(tostring(flat) or '?'))
+            cy=cy+T.ROW_H
+        else
+            local cur_tier=nil
+            for _,ent in ipairs(flat) do
+            -- Empty separator row between tier groups
+            if cur_tier and ent.tier~=cur_tier then
+                cy=cy+T.ROW_H
             end
-            cy=cy+T.ROW_H+2
+            cur_tier=ent.tier
+            local tcol=TIER_COL[ent.tier] or T.GREY
+            local tlbl=TIER_LBL[ent.tier] or '??'
+            -- KI status for boss NMs
+            local suffix=''
+            if ent.kind=='boss' and ent.ref and ent.ref.chain then
+                local kh,kt=chain_ki_status(ent.ref)
+                if kt>0 then
+                    local kc=(kh==kt) and T.GREEN or T.RED
+                    suffix=' ['..kh..'/'..kt..' KI]'
+                end
+            end
+            local pos_str=ent.pos and (' ('..ent.pos..')') or ''
+            -- Append conflux # for boss NMs
+            local cflx_str=''
+            if ent.kind=='boss' and ent.ref then
+                local cnum=settings.conflux[ent.name] or ent.ref.conflux
+                if cnum then cflx_str=' #'..cnum end
+            end
+            local ent_ref=ent
+            hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
+            -- Tier label
+            txt(px+T.PAD_X,cy,24,T.ROW_H,tcol,T.SZ,false,tlbl)
+            -- Name + pos + conflux
+            txt(px+T.PAD_X+26,cy,pw-T.PAD_X-100,T.ROW_H,tcol,T.SZ,false,
+                ent.name..pos_str..cflx_str,
+                function()
+                    if ent_ref.kind=='boss' then
+                        state.nm=ent_ref.ref; state.view='nm_view'
+                    else
+                        state.entity=ent_ref; state.entity_rev=rev
+                        state.view='entity_view'
+                    end
+                    save_settings(); build_ui()
+                end)
+            if suffix~='' then
+                txt(px+pw-84,cy,74,T.ROW_H,T.GREEN,T.SZ,true,suffix)
+            end
+            cy=cy+T.ROW_H+1
+        end
+        end -- close pcall else
+
+    elseif state.view=='entity_view' and state.entity then
+        local ent=state.entity
+        local rev=state.entity_rev or {}
+        local tcol=TIER_COL[ent.tier] or T.GREY
+        local tlbl=TIER_LBL[ent.tier] or '??'
+        -- Header: Tier + name + pos
+        sec_hdr(tlbl..' '..ent.name..' ('..(ent.pos or '?')..')')
+        sep()
+
+        -- UPWARD CHAIN: what needs this entity
+        local parents=rev[ent.name] or {}
+        if #parents>0 then
+            txt(px+T.PAD_X,cy,pw,T.ROW_H,T.YELLOW,T.SZ,false,'Needed for:'); cy=cy+T.ROW_H
+            for _,p in ipairs(parents) do
+                if p.chain then
+                    -- This mob's drop is needed to pop a chain NM
+                    local ce=p.chain
+                    local ct=chain_tier(ce)
+                    local ctcol=TIER_COL[ct] or T.GREY
+                    local for_str=p.for_item and (' -> '..p.for_item) or ''
+                    txt(px+T.PAD_X+8,cy,pw,T.ROW_H,ctcol,T.SZ,false,
+                        TIER_LBL[ct]..' '..ce.nm..' ('..(ce.pos or '?')..')'..for_str)
+                    cy=cy+T.ROW_H
+                    -- And that chain NM's KI feeds the boss
+                    if p.boss then
+                        local bt=boss_tier(p.boss,state.zone)
+                        txt(px+T.PAD_X+20,cy,pw,T.ROW_H,TIER_COL[bt] or T.GOLD,T.SZ,false,
+                            '-> '..TIER_LBL[bt]..' '..p.boss.name..' ('..(p.boss.pos or '?')..')')
+                        cy=cy+T.ROW_H
+                    end
+                elseif p.boss then
+                    -- This chain NM's KI directly feeds the boss
+                    local bt=boss_tier(p.boss,state.zone)
+                    local ki_str=p.via_ki and p.via_ki.name and (' -> '..p.via_ki.name) or ''
+                    txt(px+T.PAD_X+8,cy,pw,T.ROW_H,TIER_COL[bt] or T.GOLD,T.SZ,false,
+                        '-> '..TIER_LBL[bt]..' '..p.boss.name..' ('..(p.boss.pos or '?')..')'..ki_str)
+                    cy=cy+T.ROW_H
+                elseif p.forced_nm then
+                    -- Sub-mob needed to pop an intermediate forced NM
+                    txt(px+T.PAD_X+8,cy,pw,T.ROW_H,T.CYAN,T.SZ,false,
+                        'T2 '..p.forced_nm..' -> pop for '..p.chain.nm)
+                    cy=cy+T.ROW_H
+                end
+            end
+            cy=cy+4
+        end
+
+        -- DOWNWARD CHAIN: what this entity needs (for chain NMs)
+        if ent.kind=='chain' and ent.ref then
+            local ce=ent.ref
+            if ce.timed then
+                txt(px+T.PAD_X,cy,pw,T.ROW_H,T.CYAN,T.SZ,false,'Timed spawn — no pop required')
+                cy=cy+T.ROW_H
+            elseif ce.pop_items and #ce.pop_items>0 then
+                txt(px+T.PAD_X,cy,pw,T.ROW_H,T.YELLOW,T.SZ,false,'Requires:'); cy=cy+T.ROW_H
+                for _,pi in ipairs(ce.pop_items) do
+                    local has_sub=pi.pop_items and #pi.pop_items>0
+                    local src_tier=has_sub and 2 or 1
+                    local have=(get_count(pi.name)>0) and T.GREEN or T.RED
+                    txt(px+T.PAD_X+8,cy,pw,T.ROW_H,have,T.SZ,false,
+                        pi.name..' ('..get_count(pi.name)..') from '..
+                        TIER_LBL[src_tier]..' '..(pi.from or '?')..' ('..(pi.from_pos or '?')..')')
+                    cy=cy+T.ROW_H
+                    for _,sub in ipairs(pi.pop_items or {}) do
+                        local sh=(get_count(sub.name)>0) and T.GREEN or T.RED
+                        txt(px+T.PAD_X+20,cy,pw,T.ROW_H,sh,T.SZ,false,
+                            '  '..sub.name..' ('..get_count(sub.name)..') from T1 '..(sub.from or '?')..' ('..(sub.from_pos or '?')..')')
+                        cy=cy+T.ROW_H
+                    end
+                end
+            end
+            -- KI it drops
+            if ce.ki and ce.ki.id and ce.ki.id~=0 then
+                cy=cy+4
+                local kc=has_ki(ce.ki.id) and T.GREEN or T.RED
+                txt(px+T.PAD_X,cy,pw,T.ROW_H,kc,T.SZ,false,
+                    'Drops KI: '..ce.ki.name..(has_ki(ce.ki.id) and ' [HAVE]' or ' [MISSING]'))
+                cy=cy+T.ROW_H
+            end
+        elseif ent.kind=='mob' and ent.ref then
+            -- For a T1/T2 mob: show what item it drops
+            local pi=ent.ref
+            local have=(pi.name and get_count(pi.name)>0) and T.GREEN or T.RED
+            if pi.name then
+                txt(px+T.PAD_X,cy,pw,T.ROW_H,have,T.SZ,false,
+                    'Drops: '..pi.name..' ('..get_count(pi.name)..')')
+                cy=cy+T.ROW_H
+            end
+            -- Conflux hint
+            if pi.from_conflux then
+                txt(px+T.PAD_X,cy,pw,T.ROW_H,T.GREY,T.SZ,false,
+                    'Farm at conflux #'..pi.from_conflux)
+                cy=cy+T.ROW_H
+            end
         end
 
     elseif state.view=='nm_view' and state.nm then
@@ -951,7 +1250,7 @@ local function build_ui()
 
     cy=cy+T.PAD_Y
     windower.prim.set_size(bg_prim,pw,cy-content_start)
-    state.panel_h=T.HDR_H+(cy-content_start)
+    state.panel_h=T.HDR_H+T.TITLE_H+(cy-content_start)
     -- Resize shield to cover full panel so texts lib blocks all FFXI clicks
     if state.shield then
         state.shield:pos(state.px, state.py)
@@ -966,7 +1265,6 @@ local function build_ui()
         state.shield:text(table.concat(lines,'\n'))
     end
     if dbg_obj then dbg_obj:pos(state.px,state.py+state.panel_h+2) end
-    if not state.minimized then update_map_display() end
 end
 
 --==================================================================================================
@@ -994,7 +1292,7 @@ windower.register_event('mouse', function(type,x,y,delta,blocked)
             end
         end
         -- Start drag anywhere on header top strip (no buttons there)
-        if y<=state.py+T.HDR_H then
+        if y<=state.py+T.HDR_H+T.TITLE_H then
             drag.active=true;drag.sx=x;drag.sy=y;drag.ox=state.px;drag.oy=state.py
         end
         return true  -- consume regardless
@@ -1008,18 +1306,19 @@ windower.register_event('mouse', function(type,x,y,delta,blocked)
     -- type 3 (right click) intentionally NOT handled — cannot be blocked from FFXI
     -- Use [Ref] button in header to refresh instead
 
-    if type==10 then
+    if type==10 then  -- scroll
         if in_panel then
             local up=delta and delta>0
-            if key_state.shift then
-                settings.map.size=math.max(100,math.min(1000,settings.map.size+(up and 50 or -50)))
-                map_ctx.last_size=nil  -- force resize on next update_map_display
-            elseif key_state.ctrl then
-                T.WIDTH=math.max(300,math.min(600,T.WIDTH+(up and -20 or 20)));settings.display.width=T.WIDTH
+            if key_state.ctrl then
+                -- Ctrl+scroll = width
+                T.WIDTH=math.max(300,math.min(600,T.WIDTH+(up and -20 or 20)))
+                settings.display.width=T.WIDTH
             elseif key_state.alt then
+                -- Alt+scroll = font size
                 local fs=math.max(8,math.min(16,settings.display.font_size+(up and -1 or 1)))
                 settings.display.font_size=fs;T.SZ=fs;T.SZ_H=fs+1;T.ROW_H=fs+6
             else
+                -- plain scroll = opacity
                 settings.display.bg_alpha=math.max(20,math.min(245,settings.display.bg_alpha+(up and -20 or 20)))
             end
             save_settings();build_ui();return true
@@ -1110,27 +1409,20 @@ local function inv_loop() refresh_inventory();refresh_data();coroutine.schedule(
 local function ki_loop()  refresh_key_items();refresh_data();coroutine.schedule(ki_loop,10) end
 
 windower.register_event('zone change', function()
-    map_ctx.loaded_key=nil
     coroutine.schedule(function() refresh_inventory();refresh_key_items();refresh_data() end,2)
 end)
 windower.register_event('load', function()
-    load_zones();load_atma_db();load_settings();init_debug()
+    load_zones();load_atma_db();load_drops_db();load_settings();init_debug()
     refresh_inventory();refresh_key_items();build_ui()
     coroutine.schedule(inv_loop,5);coroutine.schedule(ki_loop,10)
     windower.add_to_chat(C.HAVE,'[AbyssTracker] Loaded. Type //at guide for help.')
 end)
 windower.register_event('unload', function()
-    save_settings();destroy_all();destroy_map()
+    save_settings();destroy_all()
     if dbg_obj then pcall(function() dbg_obj:destroy() end) end
 end)
 windower.register_event('login', function()
     coroutine.schedule(function() refresh_inventory();refresh_key_items();build_ui() end,3)
-end)
-windower.register_event('keyboard', function(key,down)
-    if key==29 or key==157 or key==162 or key==163 or key==17 then key_state.ctrl=down end
-    if key==56 or key==184 or key==164 or key==165 or key==18 then key_state.alt=down end
-    -- Left/Right Shift: DI=42/54, VK=160/161/16
-    if key==42 or key==54 or key==160 or key==161 or key==16 then key_state.shift=down end
 end)
 windower.register_event('keyboard', function(key,down)
     if key==29 or key==157 then key_state.ctrl=down end  -- Left/Right Ctrl
