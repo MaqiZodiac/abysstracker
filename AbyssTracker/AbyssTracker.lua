@@ -54,13 +54,17 @@ local T = {
     FONT='Tahoma',SZ=11,SZ_H=12,PAD_X=8,PAD_Y=5,ROW_H=17,HDR_H=30,TITLE_H=20,WIDTH=450,
 }
 
+-- Configurable nav/link symbol — change with //at chars, persists in settings
+local NAV_SYM='-->'
+local NAV_FONT=T.FONT  -- font the symbol renders in
+
 --==================================================================================================
 -- DEFAULTS
 --==================================================================================================
 local defaults = {
     display={pos_x=1200,pos_y=160,bg_alpha=200,minimized=false,show_cfg=false,font_size=11,draggable=true,width=450},
     map={visible=false,position='right',size=500},
-    session={last_zone='Abyssea - Tahrongi',last_nm='Chloris',last_view='tree'},
+    session={last_zone='Abyssea - Tahrongi',last_nm='Chloris',last_view='tree',nav_sym='-->',nav_font='Tahoma'},
     collapse={},conflux={},atma={},
     trust_set={},  -- { ['Chloris']='chloris_set', ['Glavoid']='glavoid_set' }
 }
@@ -80,6 +84,7 @@ local state={
     inv={},ki={},
     minimized=false,px=1200,py=160,panel_h=100,
     map_visible=false,
+    chars_font='Wingdings',
     drop_source_item=nil,
     drop_source_back=nil,
     active_job=nil,
@@ -245,6 +250,8 @@ local function save_settings()
     settings.display.pos_x=state.px;settings.display.pos_y=state.py
     settings.display.width=T.WIDTH
     settings.map.visible=state.map_visible
+    settings.session.nav_sym=NAV_SYM
+    settings.session.nav_font=NAV_FONT
     config.save(settings)
 end
 local function load_settings()
@@ -257,6 +264,8 @@ local function load_settings()
     if not settings.map               then settings.map={visible=false,position='right',size=500} end
     if not settings.map.size          then settings.map.size=500 end
     settings.map.large=nil
+    if settings.session.nav_sym  then NAV_SYM=settings.session.nav_sym end
+    if settings.session.nav_font then NAV_FONT=settings.session.nav_font end
     state.minimized=settings.display.minimized
     state.map_visible=settings.map.visible
     state.px=settings.display.pos_x;state.py=settings.display.pos_y
@@ -554,25 +563,24 @@ local function build_ui()
         pos={x=px, y=py},
         text={font=T.FONT,size=1,red=0,green=0,blue=0,alpha=0},
         bg={alpha=0,visible=false},
-        flags={draggable=true},
+        flags={draggable=false},
         padding=0,
     })
     state.shield:text('')
     state.shield:show()
     all_texts[#all_texts+1]={obj=state.shield,dtype=nil,ref=nil,fill_prim=nil}
 
-    -- TITLE ROW — drag zone, centred app name
+    -- TITLE ROW — full row is drag zone; text has no hotzone so prim catches all clicks
     prim(px,cy,pw,T.TITLE_H,T.HDR_A,T.HDR_R,T.HDR_G,T.HDR_B)
     local title_str='Abyssea Tracker'
     local title_sz=T.SZ_H+2
     local title_approx_w=math.floor(#title_str*title_sz*0.55)
     local title_x=px+math.floor((pw-title_approx_w)/2)
-    txt(title_x,cy+2,title_approx_w+10,T.TITLE_H-2,T.GOLD,title_sz,true,title_str,
-        function() state.view='zone_menu';state.nm=nil;state.show_footer=false;state.footer_entry=nil;
-                   state.drop_source_item=nil;state.drop_source_back=nil;build_ui() end)
+    txt(title_x,cy+2,title_approx_w+10,T.TITLE_H-2,T.GOLD,title_sz,true,title_str)
+    -- no on_left → no hotzone → prim handles drag across entire title row
     cy=cy+T.TITLE_H
 
-    -- NAV ROW — breadcrumb + buttons
+    -- NAV ROW
     prim(px,cy,pw,T.HDR_H,T.HDR_A,math.floor(T.HDR_R*0.7),math.floor(T.HDR_G*0.7),math.floor(T.HDR_B*0.7))
     local by=cy+math.floor((T.HDR_H-T.SZ)/2)-1
     local crumb=''
@@ -581,36 +589,36 @@ local function build_ui()
     elseif state.view=='plus1' then crumb='Drop Overview > Armor +1'
     elseif state.view=='plus2' then crumb='Drop Overview > Armor +2'
     elseif state.view=='drop_sources' then crumb='Sources: '..(state.drop_source_item or '?')
+    elseif state.view=='chars' then crumb='Link Symbol Picker'
     elseif state.view=='nm_list' and state.zone then crumb=state.zone.zone_name:gsub('Abyssea %- ','')
     elseif state.view=='entity_view' and state.entity then
         crumb=(state.zone and state.zone.zone_name:gsub('Abyssea %- ','') or '')..' > '..state.entity.name
     elseif state.view=='nm_view' and state.zone and state.nm then
         crumb=state.zone.zone_name:gsub('Abyssea %- ','')..' > '..state.nm.name end
-    txt(px+T.PAD_X,by,pw-220,T.HDR_H,T.WHITE,T.SZ,false,crumb,
+    txt(px+T.PAD_X,by,pw-180,T.HDR_H,T.WHITE,T.SZ,false,crumb,
         function()
             if state.view=='nm_view' then state.view='nm_list';state.nm=nil;state.show_footer=false;build_ui()
             elseif state.view=='entity_view' then state.view='nm_list';state.entity=nil;build_ui()
             elseif state.view=='nm_list' then state.view='zone_menu';state.zone=nil;build_ui()
             elseif state.view=='drop_sources' then state.view=state.drop_source_back or 'overview';state.drop_source_item=nil;build_ui()
             elseif state.view=='plus1' or state.view=='plus2' then state.view='overview';build_ui()
+            elseif state.view=='chars' then state.view='zone_menu';build_ui()
             elseif state.view=='overview' then state.view='zone_menu';build_ui() end
         end)
     local vlbl=(settings.session.last_view=='tree') and '[Tree]' or '[List]'
-    txt(px+pw-204,by,48,T.HDR_H,T.BLUE,T.SZ,false,vlbl,
+    txt(px+pw-158,by,48,T.HDR_H,T.BLUE,T.SZ,false,vlbl,
         function() settings.session.last_view=(settings.session.last_view=='tree') and 'list' or 'tree';save_settings();build_ui() end)
     local map_col=state.map_visible and {80,220,200} or {130,130,150}
-    txt(px+pw-152,by,40,T.HDR_H,map_col,T.SZ,true,'[Map]',
+    txt(px+pw-106,by,40,T.HDR_H,map_col,T.SZ,true,'[Map]',
         function()
             state.map_visible=not state.map_visible
             if not state.map_visible then destroy_map() end
             save_settings();build_ui()
         end)
     local cfg_col=settings.display.show_cfg and T.YELLOW or T.GREY
-    txt(px+pw-107,by,36,T.HDR_H,cfg_col,T.SZ,false,'[Cfg]',
+    txt(px+pw-62,by,36,T.HDR_H,cfg_col,T.SZ,false,'[Cfg]',
         function() settings.display.show_cfg=not settings.display.show_cfg;save_settings();build_ui() end)
-    txt(px+pw-66,by,22,T.HDR_H,T.GREY,T.SZ,false,'[R]',
-        function() refresh_inventory();refresh_key_items();refresh_data() end)
-    txt(px+pw-38,by,26,T.HDR_H,T.GREY,T.SZ,false,state.minimized and '[+]' or '[-]',
+    txt(px+pw-22,by,20,T.HDR_H,T.GREY,T.SZ,false,state.minimized and '[+]' or '[-]',
         function()
             state.minimized=not state.minimized
             if state.minimized then
@@ -627,6 +635,25 @@ local function build_ui()
     end
 
     local content_start=cy;cy=cy+T.PAD_Y
+
+    -- nav_link: renders symbol in NAV_FONT + label in Tahoma, both clickable
+    local function nav_link(x,y,w,h,col,label,fn)
+        local sym_w=math.floor(T.SZ*1.6)
+        -- Register full-width hotzone FIRST so it's checked before any txt hotzones
+        if fn then hot_zones[#hot_zones+1]={x=x,y=y,w=w,h=h,fn=fn} end
+        -- Symbol in NAV_FONT (no hotzone)
+        tidx=tidx+1
+        local sobj=texts.new({
+            pos={x=x,y=y},
+            text={font=NAV_FONT,size=T.SZ,red=col[1],green=col[2],blue=col[3],
+                  alpha=255,bold=false,stroke={width=2,alpha=140,red=0,green=0,blue=0}},
+            bg={alpha=0,visible=false},flags={draggable=false},padding=0,
+        })
+        sobj:text(NAV_SYM);sobj:show()
+        all_texts[#all_texts+1]={obj=sobj,dtype=nil,ref=nil,fill_prim=nil}
+        -- Label in Tahoma (nil fn — hotzone already registered above)
+        txt(x+sym_w+2,y,w-sym_w-2,h,col,T.SZ,false,label,nil)
+    end
 
     -- HELPERS
     local function sep() prim(px,cy,pw,1,T.SEP_A,T.SEP_R,T.SEP_G,T.SEP_B);cy=cy+5 end
@@ -744,7 +771,7 @@ local function build_ui()
         end
 
         if entry.timed then
-            -- TIMED: single line — [checkbox] NM (pos) >> KI name
+            -- TIMED: single line — [checkbox] NM (pos) → KI name
             -- No expand, no separate KI line, no notes
             local have_ki=has_ki(entry.ki and entry.ki.id)
             local fp=checkbox(px+T.PAD_X,cy+3,have_ki)
@@ -777,7 +804,7 @@ local function build_ui()
                     save_settings();build_ui()
                 end,'ki',ki_ref)
             if ki_ref then all_texts[arr_idx].fill_prim=fp end
-            -- NM name >> KI name — dtype='ki' so refresh_data keeps color in sync with arrow
+            -- NM name → KI name — dtype='ki' so refresh_data keeps color in sync with arrow
             local lbl=entry.nm..' ('..(entry.pos or '?')..') >> '..ki_name
             local lbl_w=pw-T.PAD_X-14-20-(is_top and 50 or 4)
             txt(px+T.PAD_X+14+20,cy,lbl_w,T.ROW_H,arrow_col,T.SZ,true,lbl,
@@ -823,13 +850,13 @@ local function build_ui()
     if state.view=='zone_menu' then
         -- Overview button
         hovbg(px+T.PAD_X+4,cy,pw-T.PAD_X-4,T.ROW_H)
-        txt(px+T.PAD_X+8,cy,pw-T.PAD_X-8,T.ROW_H,T.CYAN,T.SZ,true,'>> Drop Overview',
+        nav_link(px+T.PAD_X+8,cy,pw-T.PAD_X-8,T.ROW_H,T.CYAN,'Drop Overview',
             function() state.view='overview';build_ui() end)
         cy=cy+T.ROW_H+4; sep()
         local groups={
-            {'VISION OF ABYSSEA',{'Abyssea - La Theine','Abyssea - Konschtat','Abyssea - Tahrongi'}},
-            {'SCARS OF ABYSSEA', {'Abyssea - Misareaux','Abyssea - Vunkerl','Abyssea - Attohwa'}},
-            {'HEROES OF ABYSSEA',{'Abyssea - Grauberg','Abyssea - Altepa','Abyssea - Uleguerand'}},
+            {'Vision of Abyssea',{'Abyssea - La Theine','Abyssea - Konschtat','Abyssea - Tahrongi'}},
+            {'Scars of Abyssea', {'Abyssea - Misareaux','Abyssea - Vunkerl','Abyssea - Attohwa'}},
+            {'Heroes of Abyssea',{'Abyssea - Grauberg','Abyssea - Altepa','Abyssea - Uleguerand'}},
         }
         for _,grp in ipairs(groups) do
             sec_hdr(grp[1])
@@ -840,7 +867,7 @@ local function build_ui()
                 if z then ready,total=zone_pop_status(z) end
                 local rc=(total>0 and ready==total) and T.GREEN or (ready>0 and T.YELLOW or T.RED)
                 hovbg(px+T.PAD_X+4,cy,pw-T.PAD_X-4,T.ROW_H)
-                txt(px+T.PAD_X+8,cy,pw-T.PAD_X-70,T.ROW_H,T.ORANGE,T.SZ,false,'>> '..short,
+                nav_link(px+T.PAD_X+8,cy,pw-T.PAD_X-70,T.ROW_H,T.ORANGE,short,
                     function() state.zone=zones[zname];state.view='nm_list';build_ui() end)
                 if total>0 then
                     txt(px+pw-64,cy,58,T.ROW_H,rc,T.SZ,true,'['..ready..'/'..total..' pop]',
@@ -899,13 +926,12 @@ local function build_ui()
             cy=cy+T.ROW_H
         end
         cy=cy+T.PAD_Y;sep()
-        -- Nav links to subscreens
         hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
-        txt(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H,T.CYAN,T.SZ,true,'>> Empyrean Armor +1',
+        nav_link(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H,T.CYAN,'Empyrean Armor +1',
             function() state.view='plus1';build_ui() end)
         cy=cy+T.ROW_H
         hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
-        txt(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H,T.CYAN,T.SZ,true,'>> Empyrean Armor +2',
+        nav_link(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H,T.CYAN,'Empyrean Armor +2',
             function() state.view='plus2';build_ui() end)
         cy=cy+T.ROW_H
 
@@ -1091,14 +1117,96 @@ local function build_ui()
                 local zshort=src.zone:gsub('Abyssea %- ','')
                 local zcol=ZONE_COLORS[src.zone] or T.GREY
                 local zn_cap=src.zone; local nm_cap=src.nm
+                local fn_go=function() go_entity_any(nm_cap,zn_cap) end
                 hovbg(px+T.PAD_X,cy,pw-T.PAD_X,T.ROW_H)
-                txt(px+T.PAD_X,cy,hw,T.ROW_H,zcol,T.SZ,false,zshort..' | '..src.nm,
-                    function() go_entity_any(nm_cap,zn_cap) end)
-                txt(px+T.PAD_X+hw,cy,pw-T.PAD_X-hw-4,T.ROW_H,T.CYAN,T.SZ,true,'[>>]',
-                    function() go_entity_any(nm_cap,zn_cap) end)
+                -- Full-row hotzone first so entire line is clickable
+                hot_zones[#hot_zones+1]={x=px+T.PAD_X,y=cy,w=pw-T.PAD_X,h=T.ROW_H,fn=fn_go}
+                -- NM label in Tahoma (nil fn — hotzone already registered above)
+                txt(px+T.PAD_X,cy,hw,T.ROW_H,zcol,T.SZ,false,zshort..' | '..src.nm,nil)
+                -- Symbol in NAV_FONT (decorative, no separate hotzone)
+                tidx=tidx+1
+                local sobj=texts.new({pos={x=px+T.PAD_X+hw,y=cy},
+                    text={font=NAV_FONT,size=T.SZ,red=T.CYAN[1],green=T.CYAN[2],blue=T.CYAN[3],
+                          alpha=255,bold=true,stroke={width=2,alpha=140,red=0,green=0,blue=0}},
+                    bg={alpha=0,visible=false},flags={draggable=false},padding=0})
+                sobj:text(NAV_SYM);sobj:show()
+                all_texts[#all_texts+1]={obj=sobj,dtype=nil,ref=nil,fill_prim=nil}
                 cy=cy+T.ROW_H
             end
         end
+
+    elseif state.view=='chars' then
+        -- ── CHAR PICKER — full printable spectrum in chosen font ──────────────
+        local pick_font=state.chars_font or 'Wingdings'
+        sec_hdr('Pick Link Symbol  ['..pick_font..']');sep()
+        txt(px+T.PAD_X,cy,pw,T.ROW_H,T.YELLOW,T.SZ,false,
+            'Selected: '..NAV_SYM..'   preview: '..NAV_SYM..' Armor +1   Zone | NM  '..NAV_SYM)
+        cy=cy+T.ROW_H;sep()
+
+        local cell_w=18
+        local cols=math.floor((pw-T.PAD_X*2)/cell_w)
+        local col_i=0; local row_y=cy
+
+        local function add_char(c)
+            local cx_pos=px+T.PAD_X+col_i*cell_w
+            local is_sel=(c==NAV_SYM and pick_font==(state.chars_font or 'Wingdings'))
+            if is_sel then prim(cx_pos-1,row_y,cell_w,T.ROW_H,220,40,140,40)
+            else hovbg(cx_pos,row_y,cell_w,T.ROW_H) end
+            local col=is_sel and T.GREEN or T.CYAN
+            local cap=c; local fnt=pick_font
+            -- Create text object directly with chosen font
+            tidx=tidx+1
+            local obj=texts.new({
+                pos={x=cx_pos+1,y=row_y},
+                text={font=fnt,size=T.SZ,red=col[1],green=col[2],blue=col[3],
+                      alpha=255,bold=is_sel,stroke={width=2,alpha=140,red=0,green=0,blue=0}},
+                bg={alpha=0,visible=false},flags={draggable=false},padding=0,
+            })
+            obj:text(c);obj:show()
+            all_texts[#all_texts+1]={obj=obj,dtype=nil,ref=nil,fill_prim=nil}
+            hot_zones[#hot_zones+1]={x=cx_pos,y=row_y,w=cell_w,h=T.ROW_H,fn=function()
+                NAV_SYM=cap
+                NAV_FONT=fnt
+                settings.session.nav_sym=NAV_SYM
+                settings.session.nav_font=NAV_FONT
+                config.save(settings)
+                build_ui()
+            end}
+            col_i=col_i+1
+            if col_i>=cols then col_i=0;row_y=row_y+T.ROW_H end
+        end
+
+        local function section(lbl)
+            if col_i>0 then row_y=row_y+T.ROW_H;col_i=0 end
+            txt(px+T.PAD_X,row_y,pw,T.ROW_H,T.GOLD,T.SZ,true,lbl)
+            row_y=row_y+T.ROW_H
+        end
+
+        section('ASCII (33-126)')
+        for i=33,126 do add_char(string.char(i)) end
+        section('Latin-1 (160-255)')
+        for i=160,255 do add_char(string.char(i)) end
+        if col_i>0 then row_y=row_y+T.ROW_H end
+        cy=row_y+4;sep()
+
+        -- Font switcher row
+        txt(px+T.PAD_X,cy,pw,T.ROW_H,T.GOLD,T.SZ,true,'Fonts:')
+        cy=cy+T.ROW_H
+        local fonts={'Wingdings','Wingdings 2','Wingdings 3','Webdings',
+                     'Segoe UI Symbol','Arial Unicode MS','Lucida Sans Unicode','Tahoma'}
+        local fw=math.floor((pw-T.PAD_X*2)/#fonts)
+        for i,f in ipairs(fonts) do
+            local is_cur=(f==pick_font)
+            local fx=px+T.PAD_X+(i-1)*fw
+            if is_cur then prim(fx-1,cy,fw,T.ROW_H,180,60,100,180)
+            else hovbg(fx,cy,fw,T.ROW_H) end
+            local fc=is_cur and T.YELLOW or T.GREY
+            local fcap=f
+            txt(fx+2,cy,fw-4,T.ROW_H,fc,T.SZ-1,is_cur,
+                f:gsub(' .*',''):sub(1,8),  -- abbreviated label in Tahoma
+                function() state.chars_font=fcap;build_ui() end)
+        end
+        cy=cy+T.ROW_H
 
     elseif state.view=='nm_list' and state.zone then
         sec_hdr(state.zone.zone_name);sep()
@@ -1120,11 +1228,14 @@ local function build_ui()
             local tlbl=TIER_LBL[ent.tier] or '??'
             -- KI status for boss NMs
             local suffix=''
+            local suffix_col=T.RED
             if ent.kind=='boss' and ent.ref and ent.ref.chain then
                 local kh,kt=chain_ki_status(ent.ref)
                 if kt>0 then
-                    local kc=(kh==kt) and T.GREEN or T.RED
                     suffix=' ['..kh..'/'..kt..' KI]'
+                    if kh==kt then suffix_col=T.GREEN
+                    elseif kh>0 then suffix_col=T.YELLOW
+                    else suffix_col=T.RED end
                 end
             end
             local pos_str=ent.pos and (' ('..ent.pos..')') or ''
@@ -1151,7 +1262,7 @@ local function build_ui()
                     save_settings(); build_ui()
                 end)
             if suffix~='' then
-                txt(px+pw-84,cy,74,T.ROW_H,T.GREEN,T.SZ,true,suffix)
+                txt(px+pw-84,cy,74,T.ROW_H,suffix_col,T.SZ,true,suffix)
             end
             cy=cy+T.ROW_H+1
         end
@@ -1485,6 +1596,9 @@ windower.register_event('addon command', function(cmd,...)
     elseif cmd=='tree' then settings.session.last_view='tree';save_settings();build_ui()
     elseif cmd=='list' then settings.session.last_view='list';save_settings();build_ui()
     elseif cmd=='refresh' then refresh_inventory();refresh_key_items();refresh_data()
+    elseif cmd=='chars' then
+        if args[1] then state.chars_font=table.concat(args,' ') end
+        state.view='chars';build_ui()
     elseif cmd=='map' then
         state.map_visible=not state.map_visible
         if not state.map_visible then destroy_map() end
