@@ -64,7 +64,7 @@ A Windower 4 addon for FFXI that tracks Abyssea NM pop chains, key items, invent
 1. Copy the `AbyssTracker` folder into `Windower/addons/`
 2. Copy all `data/*.lua` files into `AbyssTracker/data/`
 3. Copy all `maps/*.bmp` map images into `AbyssTracker/maps/`
-4. In-game: `//lua load abysstracker` or add to `addons.txt`
+4. In-game: `//lua load abysstracker` or add to `init.txt`
 
 ### Folder structure
 ```
